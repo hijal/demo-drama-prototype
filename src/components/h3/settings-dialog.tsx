@@ -585,7 +585,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               className="w-full"
             >
               <RefreshCwIcon className={loading ? 'animate-spin' : ''} />
-              {"\n              Double check\n            "}</Button>
+              {"\n              Check again\n            "}</Button>
 
 
           </div>
@@ -649,7 +649,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 <div>
                   <span className="text-xs text-muted-foreground">{"Device"}</span>
                   <p className="text-[10px] text-muted-foreground/60">
-                    {"\n                    Where is the chat model considered?\n                  "}</p>
+                    {"\n                    Where the chat model runs\n                  "}</p>
                 </div>
               </div>
               <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--surface-2)]/60 border border-border">
@@ -732,7 +732,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 <div>
                   <span className="text-xs text-muted-foreground">{"Video vision by assistant"}</span>
                   <p className="text-[10px] text-muted-foreground/60">
-                    {"\n                    On: the assistant watches frames of video refs (conspicuously eats the context).\n                    Off: the model only knows about the PRESENCE of the video and does not invent its content.\n                  "}</p>
+                    {"\n                    On: the assistant watches frames of video refs (uses up a lot of context).\n                    Off: the model only knows about the PRESENCE of the video and does not invent its content.\n                  "}</p>
                 </div>
                 <button
                   type="button"
@@ -1003,7 +1003,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               className="w-full"
             >
               <RefreshCwIcon className={loading ? 'animate-spin' : ''} />
-              {"\n              Double check\n            "}</Button>
+              {"\n              Check again\n            "}</Button>
           </div>
         )}
 

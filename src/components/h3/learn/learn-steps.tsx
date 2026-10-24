@@ -241,7 +241,7 @@ export const LEARN_STEPS: LearnStep[] = [
     ),
     callouts: [
       { n: 1, title: "Sidebar", text: "Five tabs - “Generate”, “Assistant”, “Upscale”, “Gallery”, “Learn”. At the bottom is the ComfyUI indicator (green dot = backend is connected) and the settings gear." },
-      { n: 2, title: "Workplace \"Generation\"", text: "The whole chain in one place: mode (Text / Frames / References) → prompt → refs (depending on the mode) → resolution and duration → “Generate video”. Below is a status card and a gallery of the latest videos." },
+      { n: 2, title: "The \"Generate\" workspace", text: "The whole chain in one place: mode (Text / Frames / References) → prompt → refs (depending on the mode) → resolution and duration → “Generate video”. Below is a status card and a gallery of the latest videos." },
       { n: 3, title: "Indicator and sensors", text: "Red dot - ComfyUI is not running: generation is not possible (gallery and settings are available). VRAM / GPU / RAM sensors - you can see from them whether you are running into video card memory." },
       { n: 4, title: "Settings - 8 tabs", text: "Everything the program can do: models and LoRA, appearance, assistant, voice input, memory optimization, ComfyUI status, links for manual download and “Reset” (danger zone). Let's look at each in the last steps of the tour." },
     ],
@@ -616,7 +616,7 @@ export const LEARN_STEPS: LearnStep[] = [
     callouts: [
       { n: 1, title: "Folders in the gallery", text: "The “New Folder” button creates a subfolder in output - group videos by project (“Advertising”, “Vacation”...). Clicking on a folder filters the grid; “All Video” shows everything in a row. An empty folder can be deleted, a non-empty folder can be cleared first." },
       { n: 2, title: "Drag and rename", text: "The video is dragged into the folder drag-and-drop directly from the card. The folder name can be changed - the videos inside will remain in place. Files are not copied, but moved, so metadata and time badges are never lost." },
-      { n: 3, title: "Folder on the \"Generation\" tab", text: "Next to the generation button there is a choice of project folder (appears when the folders have already been created): all new videos for this session will go into it. The selection of a folder on the “Generate” tab does not depend on the filter in the “Gallery” - each tab has its own asset." },
+      { n: 3, title: "Folder on the \"Generate\" tab", text: "Next to the generation button there is a choice of project folder (appears when the folders have already been created): all new videos for this session will go into it. The selection of a folder on the “Generate” tab does not depend on the filter in the “Gallery” - each tab has its own asset." },
     ],
     tip: "Metadata and time badges move with the video—nothing is lost.",
   },

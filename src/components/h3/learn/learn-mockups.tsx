@@ -686,7 +686,7 @@ export function MockSettingsComfyLinks() {
         <p className="text-[8px] text-muted-foreground">Python: <span className="text-foreground/80 font-mono">3.12</span></p>
         <p className="text-[8px] text-muted-foreground">GPU: <span className="text-foreground/80">RTX 4060 Ti</span></p>
         <p className="text-[8px] text-muted-foreground">VRAM: <span className="text-foreground/80 font-mono">{"8.1 / 12 GB"}</span></p>
-        <span className="justify-self-end"><MockButton>{"Double check"}</MockButton></span>
+        <span className="justify-self-end"><MockButton>{"Check again"}</MockButton></span>
       </div>
       <p className="text-[10px] font-semibold text-foreground pt-1 mb-1">{"Links"}</p>
       <SettingsRow label="Diffusion Model (VSA int8)" sub="huggingface.co/…/minimax_h3_vsa_int8…" right={<span className="text-[9px] text-cyan-300">⧉</span>} />

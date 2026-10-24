@@ -270,7 +270,7 @@ function buildSystemMessage(videoVisionOn: boolean, chatMessageCount = 0): strin
   // но с явной маркировкой: это НЕ часть этого чата, а состояние вкладки «Генерация».
   const promptDraftLine = isFreshChat
     ? "Current prompt draft: (hidden - new chat, do not drag up a topic from previous sessions; use ONLY if the user directly links to it)"
-    : `Current prompt draft (state of the "Generation" tab, NOT part of this chat - use ONLY if the user directly links to it): ${v.prompt.trim() || "(empty)"}`
+    : `Current prompt draft (state of the "Generate" tab, NOT part of this chat - use ONLY if the user directly links to it): ${v.prompt.trim() || "(empty)"}`
 
   return `${H3_OFFICIAL_PROMPT_SPEC}
 

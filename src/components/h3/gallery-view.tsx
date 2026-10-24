@@ -307,7 +307,7 @@ The folder must be empty - the videos will not be affected.`)) return
             loading={loading}
             onRefresh={load}
             onDeleteFile={deleteFile}
-            emptyHint={"No video yet. Generate the first one in the \"Generation\" tab."}
+            emptyHint={"No video yet. Generate the first one in the \"Generate\" tab."}
           />
         </motion.div>
       </div>

@@ -976,7 +976,7 @@ export function GenerateView() {
               ))}
             </div>
             {video.mode === 't2v' && (
-              <p className="text-[10px] text-muted-foreground/60">{"Pure text-to-video model path (t2va). Audio references below are for voice/voice."}</p>
+              <p className="text-[10px] text-muted-foreground/60">{"Pure text-to-video model path (t2va). Audio references below are used for voice and voiceover."}</p>
             )}
             {video.mode === 'flf' && (
               <p className="text-[10px] text-muted-foreground/60">{"The video is built from the first frame to the last (fl2va). The prompt describes the transition between them."}</p>
@@ -1233,7 +1233,7 @@ export function GenerateView() {
                 onDropFiles={(files) => void addAudioOnlyFiles(files)}
                 uploading={uploadingRefs}
                 counts={`${refCounts.audio}/${refLimits.audio} aud`}
-                hint={"audio for voice/voice acting—pictures/videos are not used in this mode"}
+                hint={"audio for voice and voiceover - pictures/videos are not used in this mode"}
               />
               <input
                 ref={audioOnlyInputRef}
