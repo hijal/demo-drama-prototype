@@ -37,13 +37,6 @@ next-env.d.ts
 
 # locally staged reference uploads
 /.local-input
-/data/upscale-input/
-
-# Windows runtimes & embedded binaries (huge, Windows-only, do not push to GitHub)
-/runtime/
-/upscale/bin/
-/Bonsai_2_27B/
-/stt/models/
 
 # Large model binaries
 *.safetensors

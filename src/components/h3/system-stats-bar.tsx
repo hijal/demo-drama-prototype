@@ -173,32 +173,23 @@ export function SystemStatsBar({ collapsed }: { collapsed: boolean }) {
         <button
           onClick={async () => {
             try {
-              const [comfyRes, llmRes] = await Promise.allSettled([
-                fetch('/api/comfy/free', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ weights: 'high' }),
-                }).then(r => r.json().then(d => ({ ok: r.ok, ...d }))),
-                fetch('/api/llm/stop', { method: 'POST' }).then(r => r.json().then(d => ({ ok: r.ok, ...d }))),
-              ])
-              const comfyOk = comfyRes.status === 'fulfilled' && comfyRes.value.ok
-              const llmOk = llmRes.status === 'fulfilled' && llmRes.value.ok
-              if (comfyOk && llmOk) {
-                toast.success("VRAM cache unloaded (ComfyUI + LLM)")
-              } else if (comfyOk || llmOk) {
-                toast.success("Part unloaded from VRAM")
+              const r = await fetch('/api/comfy/free', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ weights: 'high' }),
+              })
+              const d = await r.json().catch(() => ({}))
+              if (r.ok) {
+                toast.success("VRAM cache unloaded")
               } else {
-                const errors: string[] = []
-                if (comfyRes.status === 'fulfilled' && comfyRes.value.error) errors.push(comfyRes.value.error)
-                if (llmRes.status === 'fulfilled' && llmRes.value.error) errors.push(llmRes.value.error)
-                toast.error(errors.join('; ') || "Failed to unload cache")
+                toast.error(d.error || "Failed to unload cache")
               }
             } catch {
               toast.error("Services are unavailable")
             }
           }}
           className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-red-400 transition-colors"
-          title={"Unload ComfyUI and LLM models from VRAM"}
+          title={"Unload ComfyUI models from VRAM"}
         >
           <Trash2Icon className="w-3 h-3" />
           {"\n          Unload VRAM cache\n        "}</button>

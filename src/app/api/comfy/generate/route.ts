@@ -7,7 +7,6 @@ import { readStaged, deleteStaged } from '@/lib/staging'
 import { recordPendingMeta } from '@/lib/pending-meta'
 import { loadLoras, listLoraFiles, TURBO_LORA_NAME } from '@/lib/loras-config'
 import { getAppConfig } from '@/lib/app-config'
-import { runGeneration, assertGenerationAllowed } from '@/lib/vram-arbiter'
 import type { MiniMaxH3Params } from '@/lib/comfy/minimax-h3-template'
 
 /**
@@ -32,14 +31,6 @@ export async function POST(req: NextRequest) {
     // символов — дальше уходит в filename_prefix VHS («folder/Minimax_Studio»)
     // и в пути сайдкаров. Клиент шлёт '' (общая) или имя существующей папки.
     body.outputSubfolder = path.basename(String(body.outputSubfolder ?? '')).replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 60)
-
-    // Fast-path 409 (до загрузки референсов): ассистент занят — не тратим
-    // время на upload и не оставляем осиротевших файлов в input/ ComfyUI.
-    // Полная проверка выполняется под mutex в runGeneration.
-    const quickBlock = assertGenerationAllowed()
-    if (quickBlock) {
-      return NextResponse.json({ error: quickBlock }, { status: 409 })
-    }
 
     // Upload base64 images if provided
     if (body.refImagesBase64?.length) {
@@ -132,13 +123,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // VRAM arbitration: LLM должен ПОЛНОСТЬЮ покинуть VRAM до загрузки MiniMax.
-    // Mutex держится и на submit — окно для гонки с чатом исключено.
-    const run = await runGeneration(() => submitVideo(body))
-    if (!run.ok) {
-      return NextResponse.json({ error: run.error }, { status: run.status })
-    }
-    const result = run.result
+    const result = await submitVideo(body)
     // Set active prompt so KJ preview events can be mapped
     if (result.prompt_id) {
       setActivePrompt(result.prompt_id)

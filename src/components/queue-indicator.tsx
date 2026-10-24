@@ -143,7 +143,7 @@ function useGlobalQueuePoller() {
               const count = (unknownCountMap.get(item.id) ?? 0) + 1
               unknownCountMap.set(item.id, count)
               if (count >= UNKNOWN_THRESHOLD) {
-                store.setStatus(item.id, 'error', "ComfyUI is not responding. Rerun start.bat.")
+                store.setStatus(item.id, 'error', "ComfyUI is not responding. Restart it (Colab: rerun Step 7).")
               }
               return
             }

@@ -265,10 +265,6 @@ export function MetaDialog({ filePath, filename, onClose }: MetaDialogProps) {
     return Object.keys(merged).length > 0 ? JSON.stringify(merged, null, 2) : null
   })()
 
-  /* (правка 94) Сайдкар апскейла (DLSS / RTX Video): без промпта, но с
-   * информацией о файле — показываем отдельным блоком вместо пустоты. */
-  const isUpscaleMeta = typeof params?.tool === 'string'
-
   /* Порталим в body (как VideoLightbox): внутри грида предки с transform/
      filter (framer-анимации) ломают position:fixed и обрезают модалку. */
   const content = (
@@ -320,42 +316,6 @@ export function MetaDialog({ filePath, filename, onClose }: MetaDialogProps) {
                 <p className="text-[10px] text-muted-foreground font-mono">job {data.job_id}</p>
               )}
 
-              {/* (правка 94) Инфо о файле апскейла (DLSS 5 / RTX Video) */}
-              {isUpscaleMeta && (
-                <div className="space-y-1">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                    {"\n                    Upscale result\n                  "}</p>
-                  <div className="grid grid-cols-2 gap-2 rounded-md border border-border bg-[var(--surface-2)] p-3">
-                    <ParamCell label={"Tool"}>
-                      <span className="text-[13px]">{String(params?.tool)}</span>
-                    </ParamCell>
-                    <ParamCell label={"Resolution"}>
-                      {typeof params?.resolution === 'string' ? params.resolution : '—'}
-                    </ParamCell>
-                    <ParamCell label={"Duration"}>
-                      {typeof params?.duration_seconds === 'number'
-                        ? `${formatDuration(params.duration_seconds)} (${params.duration_seconds.toFixed(1)} s)`
-                        : '—'}
-                    </ParamCell>
-                    <ParamCell label="FPS">
-                      {typeof params?.fps === 'number' ? `${params.fps}` : '—'}
-                    </ParamCell>
-                    <ParamCell label={"File size"}>
-                      {typeof params?.file_size === 'number' ? formatSize(params.file_size) : '—'}
-                    </ParamCell>
-                    <ParamCell label={"Created"}>
-                      {formatCreatedAt(params?.created_at) ?? '—'}
-                    </ParamCell>
-                    {typeof params?.source_file === 'string' && params.source_file && (
-                      <div className="col-span-2">
-                        <ParamCell label={"Source"}>
-                          <span className="font-mono text-xs break-all">{params.source_file}</span>
-                        </ParamCell>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
 
               {/* Prompt */}
               {prompt && (

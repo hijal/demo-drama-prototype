@@ -8,7 +8,7 @@ import {
   listLoraFiles,
   TURBO_LORA_NAME,
 } from '@/lib/loras-config'
-import { comfyBusy } from '@/lib/vram-arbiter'
+import { comfyBusy } from '@/lib/comfy/queue-status'
 import {
   readFirstMultipartPart,
   MultipartParseError,

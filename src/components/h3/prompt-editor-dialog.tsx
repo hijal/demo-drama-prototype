@@ -26,7 +26,6 @@ import {
   WrapTextIcon,
   HistoryIcon,
   SparklesIcon,
-  WandSparklesIcon,
   StarIcon,
   XIcon,
 } from 'lucide-react'
@@ -36,10 +35,8 @@ import {
   type MentionTextareaHandle,
 } from './mention-textarea'
 import { PromptQuality } from './prompt-quality'
-import { CAMERA_WORDS, EXAMPLES } from './learn/prompt-guide'
+import { CAMERA_WORDS, EXAMPLES } from '@/lib/prompt-examples'
 import { usePromptHistory } from '@/lib/prompt-history-store'
-import { useImprovePrompt } from '@/hooks/use-improve-prompt'
-import { VoiceInputButton } from './voice-input-button'
 import { cn } from '@/lib/utils'
 
 interface PromptEditorDialogProps {
@@ -86,12 +83,11 @@ export function PromptEditorDialog({
   const [rightTab, setRightTab] = useState<RightTab>('insert')
   const editorRef = useRef<MentionTextareaHandle>(null)
 
-  // History + improve prompt
+  // History
   const historyEntries = usePromptHistory((s) => s.entries)
   const toggleHistoryFavorite = usePromptHistory((s) => s.toggleFavorite)
   const removeHistoryEntry = usePromptHistory((s) => s.remove)
   const clearHistory = usePromptHistory((s) => s.clear)
-  const improvePrompt = useImprovePrompt()
 
   // Sync text when dialog opens with new content
   useEffect(() => {
@@ -104,18 +100,6 @@ export function PromptEditorDialog({
   const applyPrompt = (snippet: string) => {
     setText(snippet)
     toast.success("Prompt applied")
-  }
-
-  /** "Улучшить промпт" — send the current draft to the LLM assistant. */
-  const handleImprove = () => {
-    if (!text.trim()) {
-      toast.info("Prompt is empty", { description: "Enter at least a few words so LLM can improve it." })
-      return
-    }
-    // Save the current draft first so it's not lost, then hand off to the LLM.
-    onSave(text)
-    onOpenChange(false)
-    improvePrompt(text)
   }
 
   const handleSave = () => {
@@ -175,15 +159,6 @@ export function PromptEditorDialog({
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] text-muted-foreground mr-2">{text.length} {" characters"}</span>
-            {/* Improve prompt (primary action) */}
-            <button
-              type="button"
-              onClick={handleImprove}
-              title={"Send to LLM assistant for improvement"}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 text-violet-300 border border-violet-500/30 hover:from-violet-500/30 hover:to-fuchsia-500/30 transition-colors"
-            >
-              <WandSparklesIcon className="w-3.5 h-3.5" />
-              {"\n              Improve prompt\n            "}</button>
             {/* Mini-toolbar: wrap selection · copy · clear */}
             <button
               type="button"
@@ -228,7 +203,6 @@ export function PromptEditorDialog({
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-2 px-3 py-2">
           {/* Editor + quality checklist */}
           <div className="flex-1 min-h-0 flex flex-col gap-2">
-            {/* (правка 74) Круглый микрофон ВНУТРИ поля редактора */}
             <div className="relative flex-1 min-h-0">
               <MentionTextarea
                 ref={editorRef}
@@ -237,13 +211,7 @@ export function PromptEditorDialog({
                 onKeyDown={handleKeyDownFs}
                 placeholder={placeholder}
                 mentions={mentions}
-                className="w-full h-full resize-none rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10"
-              />
-              {/* (правка 118) hotkey: диалог монтируется последним → пока открыт, клавишу принимает он */}
-              <VoiceInputButton
-                hotkey
-                onText={(t) => editorRef.current?.insertAtCursor(t)}
-                title={"Voice input - insert at cursor"}
+                className="w-full h-full resize-none rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
             </div>
             <PromptQuality prompt={text} refsCount={mentions?.length ?? 0} className="shrink-0" />

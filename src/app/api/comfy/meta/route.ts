@@ -2,15 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 import { getAppConfig } from '@/lib/app-config'
-import { ensureUpscaleMeta } from '@/lib/upscale-meta'
 
 /**
  * GET /api/comfy/meta?path=subfolder/filename.ext
  * Reads the .meta.json sidecar file from the ComfyUI output directory.
- *
- * (правка 94) Ленивый бэкфилл: у апскейл-видео (DLSS5 / RTXVIDEO по имени
- * файла) сайдкаров исторически нет — генерируем его на лету из ffprobe
- * (разрешение/длительность/fps/размер), после чего отдаём как обычный.
  */
 export const dynamic = 'force-dynamic'
 
@@ -34,18 +29,6 @@ export async function GET(req: NextRequest) {
 
   try {
     if (!fs.existsSync(metaFile)) {
-      // (правка 94) Нет сайдкара, но файл — результат апскейла? Сгенерировать.
-      const base = path.basename(safePath)
-      const isUpscale = /_(?:DLSS5|RTXVIDEO(?:_PREVIEW)?)_\d{8}-\d{6}/i.test(base)
-      if (isUpscale) {
-        const ok = await ensureUpscaleMeta(
-          path.join(OUTPUT_DIR, path.dirname(safePath), base),
-          `backfill_${base}`,
-        )
-        if (ok && fs.existsSync(metaFile)) {
-          return NextResponse.json(JSON.parse(fs.readFileSync(metaFile, 'utf-8')))
-        }
-      }
       return NextResponse.json({ error: 'Metadata file not found' }, { status: 404 })
     }
     const raw = fs.readFileSync(metaFile, 'utf-8')

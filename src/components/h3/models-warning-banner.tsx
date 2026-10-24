@@ -4,8 +4,7 @@
  * ModelsWarningBanner — показывает предупреждение вверху контента,
  * если одна или несколько моделей не скачаны.
  *
- * - Загружает /api/models/status и /api/config при монтировании.
- * - Учитывает выбранную LLM-квантизацию: неактивные квантизации не считаются missing.
+ * - Загружает /api/models/status при монтировании.
  * - Собирает модели со статусом 'missing' или 'error' (не 'ready', не 'downloading').
  * - Если есть — показывает жёлтый баннер с кнопкой «Скачать в настройках».
  * - Скрывается крестиком (до перезагрузки страницы).
@@ -27,31 +26,6 @@ interface ModelsWarningBannerProps {
   onOpenSettings: () => void
 }
 
-/** ID mmproj-файла (vision) — не сама модель, а сопутствующий файл (правка 52) */
-function isLlmMmproj(id: string): boolean {
-  return id === 'llm_assistant_mmproj' || id === 'llm_assistant_qwen_mmproj'
-}
-
-/** Определяет, является ли модель LLM-квантизацией (не mmproj) */
-function isLlmQuant(id: string): boolean {
-  return id.startsWith('llm_assistant') && !isLlmMmproj(id)
-}
-
-/** Файл, соответствующий выбранной LLM (пустая строка = дефолт) */
-function resolveSelectedLlm(llmModel: string): string {
-  // (правка 162) пустое значение конфига = дефолт Bonsai.
-  // Раньше (правка 99) дефолт был Qwen3.5 9B — теперь Bonsai 2 27B.
-  if (!llmModel) return 'bonsai'
-  return llmModel
-}
-
-/** (правка 52) «Семья» выбранной LLM — от неё зависит, чей mmproj считается нужным
- *  (правка 162) добавлена семья 'bonsai' — свой mmproj, не Gemma/Qwen */
-function selectedLlmFamily(llmModel: string): 'gemma' | 'qwen' | 'bonsai' {
-  if (/bonsai/i.test(llmModel)) return 'bonsai'
-  return /qwen/i.test(llmModel) ? 'qwen' : 'gemma'
-}
-
 export function ModelsWarningBanner({ onOpenSettings }: ModelsWarningBannerProps) {
   const [missing, setMissing] = useState<ModelStatusItem[]>([])
   const [dismissed, setDismissed] = useState(false)
@@ -59,46 +33,15 @@ export function ModelsWarningBanner({ onOpenSettings }: ModelsWarningBannerProps
 
   useEffect(() => {
     const check = () => {
-      console.log('[banner] re-checking model status…')
-      Promise.all([
-        fetch('/api/models/status'),
-        fetch('/api/config'),
-      ])
-        .then(([statusRes, configRes]) => Promise.all([statusRes.json(), configRes.json()]))
-        .then(([data, config]) => {
-          console.log('[banner] status:', (data.models ?? []).map((m: ModelStatusItem) => `${m.id}:${m.status}`).join(', '))
-          console.log('[banner] config.llm_model =', JSON.stringify(config.llm_model), 'isBonsaiSelected =', (config.llm_model || '') === 'bonsai' || config.llm_model === '')
-          const selectedLlm = resolveSelectedLlm(config.llm_model || '')
-          const family = selectedLlmFamily(selectedLlm)
-          // (правка 160) Bonsai-набор не считается missing, если Bonsai не выбрана.
-          // (правка 162) Пустое llm_model = дефолт Bonsai → isBonsaiSelected = true.
-          const isBonsaiSelected = (config.llm_model || '') === 'bonsai' || config.llm_model === ''
+      fetch('/api/models/status')
+        .then((statusRes) => statusRes.json())
+        .then((data) => {
           const notReady = (data.models ?? []).filter((m: ModelStatusItem) => {
             if (m.status === 'ready' || m.status === 'downloading') return false
-
-            // (правка 162) Опциональные модели (bonsai_model_light) не требуются
+            // (правка 162) Опциональные модели не требуются
             if (m.optional) return false
-
-            // (правка 160) Bonsai-набор: видим только когда Bonsai выбрана.
-            // bonsai_mmproj — часть набора (не optional), поэтому попадает сюда.
-            if (m.id.startsWith('bonsai_') && !isBonsaiSelected) return false
-
-            // LLM-квантизации: считаем только выбранную
-            if (isLlmQuant(m.id)) {
-              const file = m.relPath.split('/').pop() || ''
-              if (file !== selectedLlm) return false
-            }
-
-            // (правка 52) mmproj: считаем только того семейства, что выбрано
-            // (Gemma и Qwen3.5 имеют разные mmproj-файлы)
-            if (isLlmMmproj(m.id)) {
-              const isQwenMmproj = m.id === 'llm_assistant_qwen_mmproj'
-              if (isQwenMmproj !== (family === 'qwen')) return false
-            }
-
             return true
           })
-          console.log('[banner] missing after filter:', notReady.map((m: ModelStatusItem) => m.id).join(', '))
           setMissing(notReady)
         })
         .catch(() => {

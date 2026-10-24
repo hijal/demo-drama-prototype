@@ -4,7 +4,6 @@
  * Settings Dialog — tabbed settings:
  *   • Общие        — ComfyUI-статус, модели
  *   • Внешний вид  — тема оформления, звук при завершении (правка 111)
- *   • LLM          — устройство, контекст, макс. длина ответа
  *   • Оптимизация  — VRAM-резерв, Dynamic VRAM
  *   • ComfyUI      — версия, Python, GPU, VRAM-разбивка
  */
@@ -28,7 +27,6 @@ import {
   SunIcon,
   MoonIcon,
   SlidersHorizontalIcon,
-  BotIcon,
   BoxIcon,
   LinkIcon,
   CopyIcon,
@@ -37,7 +35,6 @@ import {
   Trash2Icon,
   RotateCcwIcon,
   TrashIcon,
-  MicIcon,
   PaletteIcon,
   SparklesIcon,
   ChevronDownIcon,
@@ -46,16 +43,11 @@ import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ModelsPanel } from './models-panel'
-import { LoraSettingsPanel } from './lora-settings-panel'
 import { DiffusionModelSelector } from './diffusion-model-selector'
-import { ModelMigrationPanel } from './model-migration-panel'
-import { LlmModelSelector } from './llm-model-selector'
-import { VoiceSettingsPanel } from './voice-settings-panel'
 import { MODELS, MODEL_CATEGORIES } from '@/lib/models-config'
 import { useGenStore, DEFAULT_VIDEO_STATE } from '@/lib/gen-store'
 import { usePromptHistory } from '@/lib/prompt-history-store'
 import { useGenDurations } from '@/lib/gen-duration-store'
-import { useAssistantChats } from '@/lib/assistant-chats-store'
 import { useGalleryRefresh } from '@/lib/gallery-refresh-store'
 import { SettingSlider } from './setting-slider'
 
@@ -78,15 +70,12 @@ interface ComfyStats {
   }>
 }
 
-type TabId = 'general' | 'appearance' | 'llm' | 'voice' | 'optimization' | 'comfy' | 'links' | 'reset'
+type TabId = 'general' | 'appearance' | 'optimization' | 'comfy' | 'links' | 'reset'
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: "General", icon: <BoxIcon className="w-4 h-4" /> },
   // (правка 111) Внешний вид: тема оформления и звук — вынесено из «Общих»
   { id: 'appearance', label: "Appearance", icon: <PaletteIcon className="w-4 h-4" /> },
-  { id: 'llm', label: 'LLM', icon: <BotIcon className="w-4 h-4" /> },
-  // (правка 65) Голосовой ввод (whisper STT, CPU)
-  { id: 'voice', label: "Voice", icon: <MicIcon className="w-4 h-4" /> },
   { id: 'optimization', label: "Optimization", icon: <SlidersHorizontalIcon className="w-4 h-4" /> },
   { id: 'comfy', label: 'ComfyUI', icon: <ServerIcon className="w-4 h-4" /> },
   { id: 'links', label: "Links", icon: <LinkIcon className="w-4 h-4" /> },
@@ -102,17 +91,6 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const [connected, setConnected] = useState<boolean | null>(null)
   const [reserveVram, setReserveVram] = useState(3)
   const [dynamicVram, setDynamicVram] = useState(true)
-  const [llmDevice, setLlmDevice] = useState<'auto' | 'gpu' | 'cpu'>('auto')
-  // (правка 119) дефолтный контекст — 25K токенов
-  const [llmCtxSize, setLlmCtxSize] = useState(25600)
-  const [llmMaxOut, setLlmMaxOut] = useState(4096)
-  // (правка 53) Видение видео ассистентом — по умолчанию ВЫКЛ
-  const [llmVideoVision, setLlmVideoVision] = useState(false)
-  // (правка 109) Квантизация KV-кэша LLM; (правка 119) по умолчанию q4_0
-  const [llmKvCache, setLlmKvCache] = useState<'off' | 'q8_0' | 'q5_1' | 'q4_0'>('q4_0')
-  // (правка 140) Тонкая настройка сэмплинга УДАЛЕНА из UI: применяются
-  // модель-осознанные значения из src/lib/llm-sampling.ts. Ручной escape-hatch
-  // остался только через config.ini ([llm] sampling_override=1 + значения).
   // (правка 54) счётчик сбросов: после «Сброса настроек» селекторы моделей
   // перезагружают конфиг (они читают его только при монтировании).
   const [resetTick, setResetTick] = useState(0)
@@ -156,53 +134,13 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           // превращал сохранённый 0 в 3 при каждом открытии диалога
           setReserveVram(typeof d.reserve_gb === 'number' ? d.reserve_gb : 3)
           setDynamicVram(d.dynamic_vram !== false)
-          if (['auto', 'gpu', 'cpu'].includes(d.llm_device)) setLlmDevice(d.llm_device)
-          if (typeof d.llm_context_size === 'number') setLlmCtxSize(d.llm_context_size)
-          if (typeof d.llm_max_output_tokens === 'number') setLlmMaxOut(d.llm_max_output_tokens)
-          if (typeof d.llm_video_vision === 'boolean') setLlmVideoVision(d.llm_video_vision)
-          // (правка 109)
-          if (['off', 'q8_0', 'q5_1', 'q4_0'].includes(d.llm_kv_cache)) setLlmKvCache(d.llm_kv_cache)
           if (typeof d.sound_on === 'boolean') setSoundOn(d.sound_on)
         })
         .catch(() => {
-          setReserveVram(3); setDynamicVram(true); setLlmDevice('auto')
-          setLlmCtxSize(25600); setLlmMaxOut(4096); setLlmVideoVision(false)
-          setLlmKvCache('q4_0')
+          setReserveVram(3); setDynamicVram(true)
         })
     }
   }, [open, checkConnection])
-
-  /** Save LLM settings (applied at next model load). */
-  const saveLlm = useCallback(async () => {
-    setSaving(true)
-    try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          llm_device: llmDevice,
-          llm_context_size: llmCtxSize,
-          llm_max_output_tokens: llmMaxOut,
-          llm_video_vision: llmVideoVision,
-          // (правка 109) квантизация KV-кэша
-          llm_kv_cache: llmKvCache,
-        }),
-      })
-      if (res.ok) {
-        toast.success("LLM settings saved", {
-          // (правка 54) точнее: устройство/контекст — при следующем запуске
-          // модели, видение видео и макс. длина — сразу (per-request).
-          description: "Device and context - the next time you run the model; the rest - immediately.",
-        })
-      } else {
-        toast.error("Save error")
-      }
-    } catch {
-      toast.error("Save error")
-    } finally {
-      setSaving(false)
-    }
-  }, [llmDevice, llmCtxSize, llmMaxOut, llmVideoVision, llmKvCache])
 
   /** Save optimization settings (applied at ComfyUI restart). */
   const saveOptimization = useCallback(async () => {
@@ -234,10 +172,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const CONFIRM: Record<string, { title: string; desc: string; button: string }> = {
     reset: {
       title: "Reset settings?",
-      // (правка 54) текст соответствует фактическому поведению: сбрасываются
-      // ВСЕ параметры, включая выбор моделей (LLM-квант, базовая модель),
-      // видение видео и звук.
-      desc: "All parameters (VRAM, LLM, model selection, generation, resolution, steps, sound) will return to default values. The action is irreversible.",
+      desc: "All parameters (VRAM, model selection, generation, resolution, steps, sound) will return to default values. The action is irreversible.",
       button: "Reset",
     },
     clean: {
@@ -247,14 +182,14 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     },
     delete: {
       title: "Delete all content?",
-      desc: "ALL generated videos, chat history with the assistant, history of prompts and the current prompt will be deleted. The action is irreversible.",
+      desc: "ALL generated videos, history of prompts and the current prompt will be deleted. The action is irreversible.",
       button: "Delete",
     },
     factory: {
       title: "Factory reset?",
       // (правка 130) Полный сброс «как с завода»: настройки + LoRA + кэш +
-      // контент + апскейл + чаты + промпты. Всё, что делает программу «твоей», чистится.
-      desc: "ALL settings will be reset (VRAM, LLM, models, sound), LoRA settings (all disabled, triggers cleared), cache (input), content (output), upscale files (input and output), assistant chat history, prompt history and favorites, current prompt and all local browser data will be deleted. The program will return to its “out of the box” state. The action is irreversible.",
+      // контент + промпты. Всё, что делает программу «твоей», чистится.
+      desc: "ALL settings will be reset (VRAM, models, sound), LoRA settings (all disabled, triggers cleared), cache (input), content (output), prompt history and favorites, current prompt and all local browser data will be deleted. The program will return to its “out of the box” state. The action is irreversible.",
       button: "Reset everything",
     },
   }
@@ -268,11 +203,9 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
          * 2) LoRA → все выключены, триггеры очищены
          * 3) Кэш (input) → удалён
          * 4) Контент (output) → удалён
-         * 5) (правка 167) Файлы апскейла (input + output) → удалены
-         * 6) Чаты ассистента → очищены
-         * 7) Промпты (история + избранное) → очищены
-         * 8) Текущий промпт + длительности → очищены
-         * 9) Все localStorage-сторы → сброшены
+         * 5) Промпты (история + избранное) → очищены
+         * 6) Текущий промпт + длительности → очищены
+         * 7) Все localStorage-сторы → сброшены
          */
         // 1) Настройки
         await fetch('/api/config', {
@@ -281,30 +214,12 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           body: JSON.stringify({
             reserve_gb: 3,
             dynamic_vram: true,
-            llm_device: 'auto',
-            llm_context_size: 25600,
-            llm_max_output_tokens: 4096,
-            llm_video_vision: false,
-            llm_kv_cache: 'q4_0',
-            // (правка 140) сэмплинг — всегда модель-осознанные значения
-            llm_sampling_override: false,
             sound_on: true,
-            llm_model: '',
             diffusion_model: '',
-            stt_enabled: true,
-            stt_dir: '',
-            stt_model: '',
-            stt_language: 'en',
-            stt_threads: 0,
           }),
         })
         setReserveVram(3)
         setDynamicVram(true)
-        setLlmDevice('auto')
-        setLlmCtxSize(25600)
-        setLlmMaxOut(4096)
-        setLlmVideoVision(false)
-        setLlmKvCache('q4_0')
         setSoundOn(true)
         setResetTick((t) => t + 1)
 
@@ -333,31 +248,20 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           body: JSON.stringify({ target: 'output' }),
         }))
 
-        // 5) (правка 167) Файлы апскейла (входные + выходные) — полный сброс
-        const cleanUpscaleOk = await serverOk(await fetch('/api/comfy/clean', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target: 'upscale' }),
-        }))
-
-        // 6) Чаты ассистента
-        useAssistantChats.getState().clearAll()
-
-        // 7) Промпты (история + избранное)
+        // 5) Промпты (история + избранное)
         usePromptHistory.getState().clear()
 
-        // 8) Текущий промпт + длительности
+        // 6) Текущий промпт + длительности
         useGenStore.setState((s) => ({ video: { ...s.video, prompt: '' } }))
         useGenDurations.getState().clear()
 
-        // 9) Полный сброс localStorage-сторов (всё, что не задемо выше)
-        //    — генерация, длительности, чаты, промпты, тема, и т.д.
+        // 7) Полный сброс localStorage-сторов (всё, что не задемо выше)
+        //    — генерация, длительности, промпты, тема, и т.д.
         //    (Сброс localStorage для конкретных ключей, чтобы гарантировать
         //     чистоту даже если какие-то стоуры не покрыты явным clear.)
         const keysToClear = [
           'h3-prompt-history',
           'cb-gen-durations', // (факт-чек) стор длительностей живёт под ЭТИМ ключом
-          'h3-assistant-chats',
           'h3-gen-store',
         ]
         for (const k of keysToClear) {
@@ -368,7 +272,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         // бэкенде, галерея сразу опустеет (не дожидаясь переключения вкладок).
         useGalleryRefresh.getState().bump()
 
-        if (loraOk && cleanInOk && cleanOutOk && cleanUpscaleOk) {
+        if (loraOk && cleanInOk && cleanOutOk) {
           toast.success("Factory reset completed. The program is in “out of the box” condition. Restart to completely reset ComfyUI.")
         } else {
           // Часть серверных шагов не удалась — говорим честно, что именно
@@ -376,7 +280,6 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             !loraOk && "LoRA reset",
             !cleanInOk && "clearing input",
             !cleanOutOk && "cleaning output",
-            !cleanUpscaleOk && "upscale cleaning",
           ].filter(Boolean).join(', ')
           toast.error("Factory reset partially completed", {
             description: `Failed: ${failed}. Check if the program is running and try again.`,
@@ -392,34 +295,14 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           body: JSON.stringify({
             reserve_gb: 3,
             dynamic_vram: true,
-            llm_device: 'auto',
-            llm_context_size: 25600,       // (правка 119) дефолт контекста — 25K
-            llm_max_output_tokens: 4096,
-            // (правка 54) ранее эти параметры сброс НЕ трогал — теперь сбрасываем всё:
-            llm_video_vision: false, // видение видео (правка 53) → выкл
-            llm_kv_cache: 'q4_0',    // квантизация KV-кэша (правки 109/119) → q4_0
-            // (правка 140) сэмплинг — всегда модель-осознанные значения
-            llm_sampling_override: false,
             sound_on: true,          // звук → вкл
-            llm_model: '',           // (правка 99) пустое = дефолт Qwen3.5 9B Q4_K_M
             diffusion_model: '',     // базовая модель → дефолтная
-            // (правка 65) голосовой ввод → значения по умолчанию
-            stt_enabled: true,
-            stt_dir: '',
-            stt_model: '',
-            stt_language: 'en',
-            stt_threads: 0,
           }),
         })
         useGenStore.setState({ video: { ...DEFAULT_VIDEO_STATE } })
         useGenDurations.getState().clear()
         setReserveVram(3)
         setDynamicVram(true)
-        setLlmDevice('auto')
-        setLlmCtxSize(25600)
-        setLlmMaxOut(4096)
-        setLlmVideoVision(false)
-        setLlmKvCache('q4_0')
         setSoundOn(true)
         setResetTick((t) => t + 1) // (правка 54) селекторы моделей перечитают конфиг
         toast.success("Settings reset to default")
@@ -447,7 +330,6 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         })
         const data = await res.json()
         if (data.ok) {
-          useAssistantChats.getState().clearAll()
           useGenDurations.getState().clear()
           usePromptHistory.getState().clear()
           useGenStore.setState((s) => ({ video: { ...s.video, prompt: '' } }))
@@ -479,7 +361,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <ServerIcon className="w-5 h-5" />
             {"\n            Settings\n          "}</DialogTitle>
           <DialogDescription>
-            {"\n            Connection, models, LLM, GPU memory, ComfyUI and manual download links\n          "}</DialogDescription>
+            {"\n            Connection, models, GPU memory, ComfyUI and manual download links\n          "}</DialogDescription>
         </DialogHeader>
 
         {/* Tab bar */}
@@ -533,9 +415,6 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 {"\n                Make sure ComfyUI is running on port 8188.\n              "}</p>
             )}
 
-            {/* Model Migration (правка 47) — на самом верху */}
-            <ModelMigrationPanel />
-
             {/* Models */}
             <div className="space-y-2 pt-2 border-t border-border">
               <ModelsPanel />
@@ -543,39 +422,6 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
             {/* Diffusion Model (правка 45); key — перечитывание после сброса (правка 54) */}
             <DiffusionModelSelector key={`dm-${resetTick}`} />
-
-            {/* Custom LoRAs (правка 44; правка 95 — турбо-лора в общем списке) */}
-            <LoraSettingsPanel />
-
-            {/* (правка 111) Тема и звук вынесены во вкладку «Внешний вид» */}
-
-            {/* (правка 116) Окно приветствия — вернуть, если галочка «Больше не показывать»
-             * случайно попала под палец: сбрасываем флаг в localStorage браузера
-             * (h3_welcome_seen_v1) и шлём событие h3:show-welcome — Home подхватывает
-             * и открывает WelcomeDialog. Настройки при этом закрываем, чтобы окно
-             * показывалось поверх приложения (у шаден-диалога outside-click закрыл бы
-             * его при клике по чужому оверлею). */}
-            <div className="space-y-2 pt-2 border-t border-border">
-              <div>
-                <span className="text-xs text-muted-foreground">{"Startup greeting"}</span>
-                <p className="text-[10px] text-muted-foreground/60">
-                  {"\n                  Pop-up window with brief instructions. If you checked the box\n                  “Do not show again” - return it with this button.\n                "}</p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() => {
-                  try {
-                    localStorage.removeItem('h3_welcome_seen_v1')
-                  } catch { /* ignore */ }
-                  window.dispatchEvent(new CustomEvent('h3:show-welcome'))
-                  onOpenChange(false)
-                }}
-              >
-                <SparklesIcon className="w-3.5 h-3.5" />
-                {"\n                Show welcome window\n              "}</Button>
-            </div>
 
             <Button
               variant="outline"
@@ -634,146 +480,6 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             </div>
           </div>
         )}
-
-        {/* ─────────── LLM ─────────── */}
-        {tab === 'llm' && (
-          <div className="space-y-4 py-2">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <BotIcon className="w-4 h-4 text-cyan-400" />
-              {"\n              LLM assistant\n            "}</div>
-            <p className="text-[11px] text-muted-foreground/70 -mt-2">
-              {"\n              The structure and context parameters of the chat model (Gemma 4 12B / Qwen3.5 9B).\n            "}</p>
-
-            <div className="space-y-1.5 pt-2 border-t border-border">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs text-muted-foreground">{"Device"}</span>
-                  <p className="text-[10px] text-muted-foreground/60">
-                    {"\n                    Where the chat model runs\n                  "}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--surface-2)]/60 border border-border">
-                {([
-                  ['auto', "Auto", "GPU with free VRAM, otherwise CPU"],
-                  ['gpu', 'GPU', "Fast (~40+ current/s), shares VRAM with generation"],
-                  ['cpu', 'CPU', "Slower, but doesn't touch VRAM"],
-                ] as const).map(([id, label, title]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    title={title}
-                    onClick={() => setLlmDevice(id)}
-                    className={cn(
-                      'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
-                      llmDevice === id
-                        ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                        : 'text-muted-foreground border border-transparent hover:text-foreground',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1.5 pt-2 border-t border-border">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">{"LLM context"}</span>
-                <span className="text-xs font-mono text-cyan-300">
-                  {(llmCtxSize / 1024).toFixed(llmCtxSize % 1024 === 0 ? 0 : 1)}{"K tokens\n                "}</span>
-              </div>
-              <input
-                type="range"
-                min={8192}
-                max={102400}
-                step={1024}
-                value={llmCtxSize}
-                onChange={(e) => setLlmCtxSize(parseInt(e.target.value, 10))}
-                className="w-full h-2 cursor-pointer accent-cyan-400"
-              />
-              <div className="flex justify-between text-[9px] text-muted-foreground/50">
-                <span>8K</span><span>100K</span>
-              </div>
-            </div>
-
-            {/* (правка 109) Квантизация KV-кэша: экономит VRAM/RAM, качество чуть ниже */}
-            <div className="space-y-1.5 pt-2 border-t border-border">
-              <span className="text-xs text-muted-foreground">{"KV cache quantization"}</span>
-              <p className="text-[10px] text-muted-foreground/60">
-                {"\n                Compresses the chat model context cache (less memory for the same context).\n                By default, q4_0 is maximum savings (edit 119); q8_0 - almost without loss of quality; off - no compression.\n              "}</p>
-              <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--surface-2)]/60 border border-border">
-                {([
-                  ['off', "Off (fp16)", "Same as before: full precision, more memory"],
-                  ['q8_0', 'Q8', "Recommended: almost no loss of quality"],
-                  ['q5_1', 'Q5', "Moderate memory savings"],
-                  ['q4_0', 'Q4', "Maximum memory savings"],
-                ] as const).map(([id, label, title]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    title={title}
-                    onClick={() => setLlmKvCache(id)}
-                    className={cn(
-                      'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
-                      llmKvCache === id
-                        ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                        : 'text-muted-foreground border border-transparent hover:text-foreground',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* (правка 53) Видение видео ассистентом — по умолчанию ВЫКЛ */}
-            <div className="space-y-1.5 pt-2 border-t border-border">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <span className="text-xs text-muted-foreground">{"Video vision by assistant"}</span>
-                  <p className="text-[10px] text-muted-foreground/60">
-                    {"\n                    On: the assistant watches frames of video refs (uses up a lot of context).\n                    Off: the model only knows about the PRESENCE of the video and does not invent its content.\n                  "}</p>
-                </div>
-                <button
-                  type="button"
-                  title={llmVideoVision ? "Turn off video vision" : "Enable video vision"}
-                  onClick={() => setLlmVideoVision(!llmVideoVision)}
-                  className={cn(
-                    'relative w-10 h-5.5 rounded-full transition-colors shrink-0',
-                    llmVideoVision ? 'bg-cyan-500/70' : 'bg-[var(--surface-4)]',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'absolute top-0.5 left-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-transform',
-                      llmVideoVision && 'translate-x-[18px]',
-                    )}
-                  />
-                </button>
-              </div>
-            </div>
-
-            {/* LLM Model Selector (правка 48); key — перечитывание после сброса (правка 54) */}
-            <LlmModelSelector key={`llm-${resetTick}`} />
-
-
-            <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
-              {"\n              Max. The response length is calculated automatically from the context.\n              Applies the next time the model is run.\n              When generating video, GPU mode automatically gives up memory.\n            "}</p>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void saveLlm()}
-              disabled={saving}
-              className="w-full"
-            >
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </div>
-        )}
-
-        {/* ─────────── Voice input (правка 65) ─────────── */}
-        {tab === 'voice' && <VoiceSettingsPanel />}
 
         {/* ─────────── Optimization ─────────── */}
         {tab === 'optimization' && (
@@ -835,7 +541,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               </div>
 
               <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
-                {"\n                Applies when restarting ComfyUI - after saving, restart the studio (start.bat).\n              "}</p>
+                {"\n                Applies when ComfyUI is restarted (Colab: rerun Step 7).\n              "}</p>
             </div>
 
             {/* ── Generation optimizations (per-generation workflow params, applied immediately) ── */}
@@ -1031,7 +737,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <RotateCcwIcon className="w-3.5 h-3.5" />
                   {"\n                  Reset settings\n                "}</Button>
                 <p className="text-[11px] text-muted-foreground/60 pl-1">
-                  {"\n                  All parameters (VRAM, LLM, model selection, generation, resolution, steps, sound) will return to default values.\n                "}</p>
+                  {"\n                  All parameters (VRAM, model selection, generation, resolution, steps, sound) will return to default values.\n                "}</p>
               </div>
 
               <div className="space-y-1.5">
@@ -1057,7 +763,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <TrashIcon className="w-3.5 h-3.5" />
                   {"\n                  Delete content\n                "}</Button>
                 <p className="text-[11px] text-muted-foreground/60 pl-1">
-                  {"\n                  Will delete ALL generated videos (output folder), history\n                  assistant chats, history of prompts and CURRENT prompt in the generation field.\n                "}</p>
+                  {"\n                  Will delete ALL generated videos (output folder), history\n                  of prompts and CURRENT prompt in the generation field.\n                "}</p>
               </div>
 
               {/* (правка 130) Заводской сброс — полный сброс «как с завода» */}
@@ -1071,7 +777,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <SparklesIcon className="w-3.5 h-3.5" />
                   {"\n                  Factory reset (all)\n                "}</Button>
                 <p className="text-[11px] text-muted-foreground/60 pl-1">
-                  {"\n                  Full factory reset: settings, LoRA (all off, triggers cleared), cache, content, chats, prompts and all local data. To transfer the program to another person.\n                "}</p>
+                  {"\n                  Full factory reset: settings, LoRA (all off, triggers cleared), cache, content, prompts and all local data. To transfer the program to another person.\n                "}</p>
               </div>
             </div>
           </div>
@@ -1116,23 +822,19 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
 function ManualDownloadPanel() {
   const [comfyDir, setComfyDir] = useState('')
-  const [bonsaiDir, setBonsaiDir] = useState('')
 
   useEffect(() => {
     fetch('/api/config')
       .then((r) => r.json())
       .then((d) => {
         setComfyDir(d.comfy_dir || '')
-        setBonsaiDir(d.llm_bonsai_dir || '')
       })
       .catch(() => {
         setComfyDir('')
-        setBonsaiDir('')
       })
   }, [])
 
   const comfyModelsRoot = comfyDir ? `${comfyDir}\\ComfyUI\\models\\` : '<ComfyUI-Easy-Install>\\ComfyUI\\models\\'
-  const bonsaiModelsRoot = bonsaiDir ? `${bonsaiDir}\\` : '<Bonsai_2_27B>\\'
 
   const copy = async (text: string, what: string) => {
     try {
@@ -1167,20 +869,6 @@ function ManualDownloadPanel() {
             <CopyIcon className="w-3.5 h-3.5" />
           </button>
         </div>
-        <div className="flex items-center gap-2 p-2 rounded-md bg-[var(--surface-2)] border border-border">
-          <FolderOpenIcon className="w-4 h-4 text-violet-400 shrink-0" />
-          <code className="flex-1 min-w-0 text-[10px] font-mono text-foreground/80 break-all">
-            Bonsai: {bonsaiModelsRoot}
-          </code>
-          <button
-            type="button"
-            onClick={() => void copy(bonsaiModelsRoot, "Path")}
-            className="p-1 rounded hover:bg-[var(--surface-3)] text-muted-foreground hover:text-foreground shrink-0"
-            title={"Copy path"}
-          >
-            <CopyIcon className="w-3.5 h-3.5" />
-          </button>
-        </div>
       </div>
 
       {MODEL_CATEGORIES.map(({ key, label }) => {
@@ -1190,9 +878,7 @@ function ManualDownloadPanel() {
           <div key={key} className="space-y-1.5 pt-2 border-t border-border">
             <div className="text-[11px] font-medium text-foreground/80">{label}</div>
             {models.map((m) => {
-              const isBonsai = m.target === 'bonsai'
-              const fullRoot = isBonsai ? bonsaiModelsRoot : comfyModelsRoot
-              const fullPath = fullRoot + m.relPath
+              const fullPath = comfyModelsRoot + m.relPath
               return (
               <div
                 key={m.id}

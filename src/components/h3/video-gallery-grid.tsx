@@ -14,8 +14,6 @@ import {
   Trash2Icon,
   InfoIcon,
   RotateCcwIcon,
-  SparklesIcon,
-  Maximize2Icon,
 } from 'lucide-react'
 import { MetaDialog } from './meta-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -30,9 +28,8 @@ import {
 import { VideoLightbox } from './video-lightbox'
 import { useGenDurations, formatDuration, formatSeconds } from '@/lib/gen-duration-store'
 import { restoreFromMeta } from '@/lib/restore-from-meta'
-import { useUpscaleTarget } from '@/lib/upscale-target-store'
 
-/** Custom MIME для drag&drop видео из галереи в поле загрузки Upscale. */
+/** Custom MIME для drag&drop видео из галереи в папки галереи. */
 export const H3_VIDEO_DND_MIME = 'application/x-h3-video'
 
 /** Thumbnail width for gallery cards (server-side sharp/ffmpeg resize). */
@@ -54,29 +51,6 @@ interface VideoGalleryGridProps {
   onRefresh?: () => void
   onDeleteFile?: (filename: string, subfolder: string) => void | Promise<void>
   emptyHint?: string
-}
-
-/**
- * (правка 78) Пометки источников видео в галерее:
- * - «DLSS 5» — вывод neural-rendering моста (DLSS 5 Visual Enhancer):
- *   «<исходное>_DLSS5_<YYYYMMDD-HHMMSS-NNNNNN>.ext»
- *   (upscale/src/…/processor.py + core/naming.py, rename_mode=Auto);
- * - «Upscale» — вывод настоящего апскейла (RTX Video SDK, вкладка
- *   «Upscale»): «<исходное>_RTXVIDEO[_PREVIEW]_<stamp>-<uuid8>.ext»
- *   (upscale/src/upscale/video/processor.py:67-69).
- * Minimax-генерации так не называются — это надёжные маркеры.
- */
-export type VideoSourceBadge = 'dlss5' | 'upscale'
-
-export function videoSourceBadge(file: Pick<VideoGalleryFile, 'filename'>): VideoSourceBadge | null {
-  if (/_DLSS5_\d{8}-\d{6}-\d{6}/.test(file.filename)) return 'dlss5'
-  if (/_RTXVIDEO(?:_PREVIEW)?_\d{8}-\d{6}-[0-9a-f]{8}/.test(file.filename)) return 'upscale'
-  return null
-}
-
-/** @deprecated используй videoSourceBadge — различает DLSS 5 и Upscale. */
-export function isUpscaleVideo(file: Pick<VideoGalleryFile, 'filename'>): boolean {
-  return videoSourceBadge(file) !== null
 }
 
 function thumbUrl(file: VideoGalleryFile): string {
@@ -122,14 +96,6 @@ export const VideoGalleryGrid = memo(function VideoGalleryGrid({
     }
     return byName
   }, [durations])
-
-  /* ── «Отправить на апскейл»: кладём цель в store и переключаем вкладку.
-   *    UpscaleView заберёт её и импортирует видео через сервер
-   *    (/api/upscale/import) — браузер в цикле не участвует. ── */
-  const sendToUpscale = useCallback((file: VideoGalleryFile) => {
-    useUpscaleTarget.getState().setTarget({ filename: file.filename, subfolder: file.subfolder })
-    window.dispatchEvent(new CustomEvent('h3:goto-upscale'))
-  }, [])
 
   /* ── Delete handler (оптимистичное обновление в useVideoGallery) ── */
   const handleDelete = useCallback(
@@ -202,9 +168,7 @@ export const VideoGalleryGrid = memo(function VideoGalleryGrid({
               onClick={() => setLightboxIndex(index)}
               draggable
               onDragStartCapture={(e) => {
-                // Drag&drop в поле загрузки Upscale: отдаём имя файла из
-                // общей папки output (а не локальный File) — upscale-view
-                // импортирует его на сервере (/api/upscale/import).
+                // Drag&drop в папки галереи: отдаём имя файла из общей папки output.
                 // (правка 93) 'copyMove': цель в галерее папок объявляет
                 // dropEffect 'move' — при effectAllowed 'copy' браузер
                 // считает их несовместимыми и событие drop НЕ наступает.
@@ -261,16 +225,6 @@ export const VideoGalleryGrid = memo(function VideoGalleryGrid({
                 >
                   <RotateCcwIcon className="w-3.5 h-3.5" />
                 </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    sendToUpscale(file)
-                  }}
-                  className="p-1.5 rounded-lg bg-violet-500/40 hover:bg-violet-500/60 text-white transition-colors"
-                  title={"Send to upscale (DLSS 5)"}
-                >
-                  <SparklesIcon className="w-3.5 h-3.5" />
-                </button>
                 {onDeleteFile && (
                   <button
                     onClick={(e) => { e.stopPropagation(); setPendingDelete({ filename: file.filename, subfolder: file.subfolder }) }}
@@ -281,35 +235,6 @@ export const VideoGalleryGrid = memo(function VideoGalleryGrid({
                   </button>
                 )}
               </div>
-
-              {/* (правка 78) Пометка источника — результат DLSS 5 / апскейла,
-                  а не Minimax-генерации. Всегда видна, не только при наведении. */}
-              {(() => {
-                const badge = videoSourceBadge(file)
-                if (!badge) return null
-                if (badge === 'upscale') {
-                  return (
-                    <span
-                      className="absolute top-1.5 left-1.5 inline-flex items-center gap-1 rounded-md bg-black/60 backdrop-blur-sm px-1.5 py-0.5 text-[9px] font-semibold text-cyan-300 border border-cyan-400/40"
-                      title={"Upscale result (RTX Video SDK, “Upscale” tab)"}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Maximize2Icon className="w-2.5 h-2.5" />
-                      Upscale
-                    </span>
-                  )
-                }
-                return (
-                  <span
-                    className="absolute top-1.5 left-1.5 inline-flex items-center gap-1 rounded-md bg-black/60 backdrop-blur-sm px-1.5 py-0.5 text-[9px] font-semibold text-fuchsia-300 border border-fuchsia-400/40"
-                    title={"Upscale result (\"Upscale\" tab)"}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <SparklesIcon className="w-2.5 h-2.5" />
-                    DLSS 5
-                  </span>
-                )
-              })()}
 
               {/* Filename + duration badge */}
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">

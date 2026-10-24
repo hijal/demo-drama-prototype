@@ -17,7 +17,6 @@ import {
   PackageIcon,
   RefreshCwIcon,
   CpuIcon,
-  BotIcon,
   XIcon,
   Trash2Icon,
 } from 'lucide-react'
@@ -56,35 +55,12 @@ function formatSpeed(bps: number): string {
   return (bps / 1024).toFixed(0) + ' KB/s'
 }
 
-function isLlmMmproj(id: string): boolean {
-  return id === 'llm_assistant_mmproj' || id === 'llm_assistant_qwen_mmproj'
-}
-
-function isLlmQuant(id: string): boolean {
-  return id.startsWith('llm_assistant') && !isLlmMmproj(id)
-}
-
-function resolveSelectedLlm(llmModel: string): string {
-  // (правка 162) пустое значение конфига = дефолт Bonsai.
-  if (!llmModel) return 'bonsai'
-  return llmModel
-}
-
-/** (правка 52) какая «семья» LLM выбрана: gemma/qwen/bonsai — от этого
- *  зависит, какой mmproj показывать/требовать.
- *  (правка 162) добавлена семья 'bonsai' — свой mmproj. */
-function selectedLlmFamily(llmModel: string): 'gemma' | 'qwen' | 'bonsai' {
-  if (/bonsai/i.test(llmModel)) return 'bonsai'
-  return /qwen/i.test(llmModel) ? 'qwen' : 'gemma'
-}
-
 /* ─── Component ─── */
 
 export function ModelsPanel() {
   const [models, setModels] = useState<ModelStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState<string | null>(null)
-  const [selectedLlm, setSelectedLlm] = useState('bonsai') // (правка 162) дефолт Bonsai
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchStatus = useCallback(async () => {
@@ -95,16 +71,6 @@ export function ModelsPanel() {
         setModels(data.models)
       }
     } catch { /* ignore */ }
-  }, [])
-
-  const loadConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/api/config')
-      if (res.ok) {
-        const d = await res.json()
-        setSelectedLlm(resolveSelectedLlm(d.llm_model || ''))
-      }
-    } catch { /* default */ }
   }, [])
 
   const startPolling = useCallback(() => {
@@ -123,9 +89,9 @@ export function ModelsPanel() {
 
   // Initial load
   useEffect(() => {
-    void Promise.all([fetchStatus(), loadConfig()]).then(() => setLoading(false))
+    void fetchStatus().then(() => setLoading(false))
     return () => stopPolling()
-  }, [fetchStatus, loadConfig, stopPolling])
+  }, [fetchStatus, stopPolling])
 
   // Start polling if any download is active
   useEffect(() => {
@@ -136,26 +102,6 @@ export function ModelsPanel() {
       stopPolling()
     }
   }, [models, startPolling, stopPolling])
-
-  // Split into two sections
-  const h3Models = models.filter(m => m.category !== 'llm')
-  const family = selectedLlmFamily(selectedLlm)
-  // (правка 138) Bonsai-набор показывается только когда выбрана Bonsai
-  const isBonsai = selectedLlm === 'bonsai'
-  const llmModels = models.filter(m => {
-    if (m.category !== 'llm') return false
-    if (m.id.startsWith('bonsai_')) return isBonsai
-    // (правка 52) mmproj — только для выбранной семьи (Gemma ↔ Qwen3.5)
-    if (m.id === 'llm_assistant_mmproj') return family === 'gemma'
-    if (m.id === 'llm_assistant_qwen_mmproj') return family === 'qwen'
-    if (isLlmQuant(m.id)) {
-      const file = m.relPath.split('/').pop() || ''
-      return file === selectedLlm
-    }
-    return false
-  })
-
-  const visibleModels = [...h3Models, ...llmModels]
 
   const download = useCallback(async (modelId: string) => {
     setStarting(modelId)
@@ -180,13 +126,8 @@ export function ModelsPanel() {
   }, [fetchStatus])
 
   const downloadAll = useCallback(async () => {
-    // (правка 79) Скачиваем ТОЛЬКО видимые модели (H3 + выбранная LLM-семья):
-    // раньше «Скачать все» тянул из полного списка /api/models/status и
-    // квантизации НЕвыбранной LLM-семьи (Gemma ↔ Qwen3.5), которых панель
-    // даже не показывает — лишние гигабайты без ведома юзера.
-    const visibleIds = new Set(visibleModels.map(m => m.id))
     const missing = models.filter(
-      m => (m.status === 'missing' || m.status === 'error') && visibleIds.has(m.id)
+      m => (m.status === 'missing' || m.status === 'error')
         // (правка 138) опциональные модели «Скачать все» не тянет —
         // только явная кнопка «Скачать» у самой модели.
         && !m.optional,
@@ -194,7 +135,7 @@ export function ModelsPanel() {
     for (const m of missing) {
       await download(m.id)
     }
-  }, [models, visibleModels, download])
+  }, [models, download])
 
   const cancel = useCallback(async (modelId: string) => {
     try {
@@ -241,8 +182,8 @@ If necessary, it can be downloaded again.`)) return
     }
   }, [fetchStatus])
 
-  const readyCount = visibleModels.filter(m => m.status === 'ready').length
-  const totalCount = visibleModels.length
+  const readyCount = models.filter(m => m.status === 'ready').length
+  const totalCount = models.length
   const allReady = readyCount === totalCount
 
   if (loading) {
@@ -297,7 +238,7 @@ If necessary, it can be downloaded again.`)) return
           <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
             {"\n            Minimax H3 (generation)\n          "}</span>
         </div>
-        {h3Models.map(model => (
+        {models.map(model => (
           <ModelRow
             key={model.id}
             model={model}
@@ -310,27 +251,6 @@ If necessary, it can be downloaded again.`)) return
         ))}
       </div>
 
-      {/* ─── Section 2: LLM ─── */}
-      {llmModels.length > 0 && (
-        <div className="space-y-1.5 pt-2 border-t border-border">
-          <div className="flex items-center gap-2 px-1 pt-1">
-            <BotIcon className="w-3.5 h-3.5 text-violet-500/70" />
-            <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-              {"\n              LLM assistant\n            "}</span>
-          </div>
-          {llmModels.map(model => (
-            <ModelRow
-              key={model.id}
-              model={model}
-              onDownload={() => void download(model.id)}
-              onCancel={() => void cancel(model.id)}
-              onDelete={() => void remove(model)}
-              deleting={deletingId === model.id}
-              starting={starting === model.id}
-            />
-          ))}
-        </div>
-      )}
     </div>
   )
 }

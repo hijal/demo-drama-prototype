@@ -64,13 +64,7 @@ function enqueueDownload(run: () => Promise<void>): Promise<void> {
 
 /** Resolve absolute path for a model file */
 function modelAbsPath(model: ModelDef): string {
-  const cfg = getAppConfig()
-  // (правка 138) Bonsai-файлы живут в своей папке сборки (<bonsai_dir>),
-  // не в models ComfyUI. relPath у движка — каталог ('llama.cpp/').
-  if (model.target === 'bonsai') {
-    return join(cfg.llmBonsaiDir, model.relPath)
-  }
-  return join(cfg.comfyRoot, 'ComfyUI', 'models', model.relPath)
+  return join(getAppConfig().comfyRoot, 'ComfyUI', 'models', model.relPath)
 }
 
 /** Check if a model file already exists (and has reasonable size) */

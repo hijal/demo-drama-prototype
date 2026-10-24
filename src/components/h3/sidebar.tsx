@@ -3,14 +3,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  BotIcon,
   ClapperboardIcon,
   FolderOpenIcon,
-  GraduationCapIcon,
   SettingsIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  SparklesIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SystemStatsBar } from '@/components/h3/system-stats-bar'
@@ -21,7 +18,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-export type TabType = 'generate' | 'upscale' | 'gallery' | 'learn' | 'assistant'
+export type TabType = 'generate' | 'gallery'
 
 interface SidebarProps {
   activeTab: TabType
@@ -32,10 +29,7 @@ interface SidebarProps {
 
 const navItems = [
   { id: 'generate' as TabType, label: "Generate", icon: ClapperboardIcon, color: '#06B6D4' },
-  { id: 'assistant' as TabType, label: "Assistant", icon: BotIcon, color: '#F59E0B' },
-  { id: 'upscale' as TabType, label: 'Upscale', icon: SparklesIcon, color: '#F472B6' },
   { id: 'gallery' as TabType, label: "Gallery", icon: FolderOpenIcon, color: '#8B5CF6' },
-  { id: 'learn' as TabType, label: "Learn", icon: GraduationCapIcon, color: '#10B981' },
 ]
 
 /* ────────────────────────────────────────────────────────────────

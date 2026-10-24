@@ -52,13 +52,11 @@ import {
   uploadInputFile,
 } from './video-shared'
 import { MentionTextarea, type MentionItem } from './mention-textarea'
-import { VoiceInputButton } from './voice-input-button'
 import { RefViewerDialog, type RefViewerData } from './ref-viewer-dialog'
 import { PromptEditorDialog, PromptEditButton } from './prompt-editor-dialog'
 import { PromptQuality } from './prompt-quality'
-import { EXAMPLES } from './learn/prompt-guide'
+import { EXAMPLES } from '@/lib/prompt-examples'
 import { usePromptHistory } from '@/lib/prompt-history-store'
-import { isStreamActive } from '@/lib/assistant-stream'
 import { getClipboardImageFiles, getClipboardImageFromApi, hasClipboardImage } from '@/lib/paste-utils'
 import { VideoGalleryGrid } from './video-gallery-grid'
 import { GenerationStatus } from './generation-status'
@@ -575,75 +573,8 @@ export function GenerateView() {
 
   const canGenerate = Boolean(video.prompt.trim())
 
-  /** Ассистент грузится или отвечает — генерация заблокирована (vram-arbiter). */
-  const [assistantBusy, setAssistantBusy] = useState(false)
-
-  // (правка 110) Fallback против застарелой блокировки: если серверный
-  // streaming-счётчик утечёт (зависший drain-насос), кнопка висела бы
-  // заблокированной ВЕЧНО. Увидев busy >60 с при отсутствии активного
-  // стрима В ЭТОЙ ВКЛАДКЕ, принудительно снимаем замок на сервере
-  // (свежий замок — стрим реально идёт — сервер не тронет).
-  const firstBusyAtRef = useRef<number | null>(null)
-  const lockReleasedRef = useRef(false)
-
-  // Лёгкий poll статуса LLM — только если ассистент использовался в этой
-  // сессии (иначе запросы не нужны: LLM никогда не запускался).
-  useEffect(() => {
-    if (sessionStorage.getItem('assistantUsed') !== '1') return
-    let stopped = false
-    const tick = async () => {
-      try {
-        const r = await fetch('/api/llm/status', { signal: AbortSignal.timeout(4000) })
-        const s = (await r.json()) as { assistantBusy?: boolean }
-        if (stopped) return
-        const busy = s.assistantBusy === true
-        // (правка 110) после принудительного снятия — локально не блокируем;
-        // реальный gate — всё равно 409 от runGeneration, так что ранний
-        // «разблок» безопасен. НО: стрим активен В ЭТОЙ ВКЛАДКЕ — блокируем
-        // (override не в силе), чтобы не пускать генерацию посреди ответа.
-        // (правка 161) Если стрим НЕ активен — busy-лок застарел
-        // (drain-насос не завершён). Генерация не мешает LLM, реальный
-        // gate — 409 от runGeneration. Снимаем блокировку сразу.
-        // Стрим активен → блокируем (не пускать генерацию посреди ответа).
-        const override = !isStreamActive()
-        setAssistantBusy(busy && !override)
-        if (busy) {
-          if (firstBusyAtRef.current === null) firstBusyAtRef.current = Date.now()
-          const stuckMs = Date.now() - firstBusyAtRef.current
-          if (!lockReleasedRef.current && stuckMs > 60_000 && !isStreamActive()) {
-            lockReleasedRef.current = true
-            firstBusyAtRef.current = null
-            setAssistantBusy(false)
-            toast.warning("Assistant", { description: "The lock was removed forcibly (stuck after the answer). The \"Generate\" button is available again." })
-            void fetch('/api/llm/release', { method: 'POST' }).catch(() => {})
-          }
-        } else {
-          firstBusyAtRef.current = null
-          // (правка 110) сервер подтвердил здоровье — снимаем локальный
-          // override, чтобы следующая утечка снова была лечима fallback'ом
-          lockReleasedRef.current = false
-        }
-      } catch {
-        /* backend not up */
-      }
-    }
-    void tick()
-    const id = setInterval(tick, 5000)
-    return () => {
-      stopped = true
-      clearInterval(id)
-    }
-  }, [])
-
-  const canGenerateNow = canGenerate && !assistantBusy
 
   const handleGenerate = useCallback(async () => {
-    // Единый guard для всех путей запуска (кнопка, Ctrl+Enter, диалог
-    // «сохранить и запустить»): ассистент занят — vram-arbiter вернёт 409
-    if (assistantBusy) {
-      toast.error("The assistant answers - wait for the answer or interrupt it")
-      return
-    }
     // Read the store AT CALL TIME — the fullscreen editor's "save & run"
     // (and history/example inserts) may have updated the prompt a moment ago.
     const v = useGenStore.getState().video
@@ -740,7 +671,7 @@ export function GenerateView() {
       chunkFFThreshold: v.chunkFFThreshold,
       outputSubfolder: v.outputFolder || '', // (правка 91) папка проекта
     })
-  }, [generate, assistantBusy])
+  }, [generate])
 
   useEffect(() => {
     if (error) toast.error(error)
@@ -750,12 +681,12 @@ export function GenerateView() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canGenerateNow) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canGenerate) {
         e.preventDefault()
         void handleGenerate()
       }
     },
-    [handleGenerate, canGenerateNow],
+    [handleGenerate, canGenerate],
   )
 
   /* ──────────── Ref list edits that keep prompt tags in sync ──────────── */
@@ -1581,18 +1512,9 @@ export function GenerateView() {
                 onKeyDown={handleKeyDown}
                 placeholder="A girl with <Picture 1> walks through the market from <Video 1> and says: <d>Almost there.</d> …"
                 mentions={mentions}
-                className="h-[220px] pr-10"
+                className="h-[220px]"
               />
               <PromptEditButton onOpen={() => setPromptEditorOpen(true)} />
-              {/* (правка 74) Голосовой ввод: круглый микрофон внутри поля промпта */}
-              {/* (правка 118) hotkey: R/К — диктовка в поле промпта */}
-              <VoiceInputButton
-                hotkey
-                onText={(t) => {
-                  const cur = video.prompt
-                  setPrompt((cur ? cur.trimEnd() : '') ? `${cur.trimEnd()} ${t}` : t)
-                }}
-              />
               <PromptEditorDialog
                 open={promptEditorOpen}
                 onOpenChange={setPromptEditorOpen}
@@ -1815,14 +1737,8 @@ export function GenerateView() {
 
             <Button
               onClick={() => void handleGenerate()}
-              disabled={!canGenerateNow}
-              title={
-                assistantBusy
-                  ? "💬 The assistant answers - wait for the answer or interrupt it"
-                  : canGenerate
-                    ? "Generate video (Ctrl+Enter)"
-                    : "Enter prompt"
-              }
+              disabled={!canGenerate}
+              title={canGenerate ? "Generate video (Ctrl+Enter)" : "Enter prompt"}
               className="h-11 px-6 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white border-0 text-sm font-semibold shadow-lg shadow-cyan-500/20"
             >
               {isGenerating ? "Add to queue" : "Generate video"}

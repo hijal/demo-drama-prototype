@@ -5,15 +5,13 @@ import { getAppConfig } from '@/lib/app-config'
 
 /**
  * POST /api/comfy/clean
- * Body: { target: 'input' | 'output' | 'upscale' }
+ * Body: { target: 'input' | 'output' }
  *
  * Удаляет ВСЕ файлы и подкаталоги в указанной директории.
  * Сама директория сохраняется (удаляется только её содержимое).
  *
  * - target='input'   → очищает ComfyUI/input  (референсы, кадры, загрузки)
  * - target='output'  → очищает ComfyUI/output (сгенерированные видео + .meta.json)
- * - target='upscale' → (правка 167) очищает data/upscale-input, data/upscale-output,
- *   upscale/outputs — все файлы апскейла (входные и выходные)
  */
 
 /** Рекурсивно очищает содержимое одной директории. Возвращает число удалённых элементов. */
@@ -47,26 +45,11 @@ export async function POST(req: Request) {
     const body = await req.json()
     const target: unknown = body.target
 
-    if (target !== 'input' && target !== 'output' && target !== 'upscale') {
+    if (target !== 'input' && target !== 'output') {
       return NextResponse.json(
-        { error: 'target must be "input", "output" or "upscale"' },
+        { error: 'target must be "input" or "output"' },
         { status: 400 },
       )
-    }
-
-    // (правка 167) Upscale: чистим ВСЕ директории апскейла (входные + выходные)
-    if (target === 'upscale') {
-      const cwd = process.cwd()
-      const dirs = [
-        path.join(cwd, 'data', 'upscale-input'),
-        path.join(cwd, 'data', 'upscale-output'),
-        path.join(cwd, 'upscale', 'outputs'),
-      ]
-      let total = 0
-      for (const d of dirs) {
-        total += await cleanDirectory(d)
-      }
-      return NextResponse.json({ ok: true, deleted: total })
     }
 
     const config = getAppConfig()

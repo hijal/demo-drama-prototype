@@ -15,10 +15,7 @@ export interface ModelDef {
   /** Human-readable size */
   sizeLabel: string
   /** Category for grouping in UI */
-  category: 'diffusion' | 'text_encoder' | 'vae' | 'lora' | 'upscaler' | 'preview' | 'llm'
-  /** (правка 138 / Bonsai) Куда класть файл: 'comfy' (по умолчанию —
-   *  ComfyUI/models/<relPath>) или 'bonsai' (<bonsai_dir>/<relPath>). */
-  target?: 'comfy' | 'bonsai'
+  category: 'diffusion' | 'text_encoder' | 'vae' | 'lora' | 'upscaler' | 'preview'
   /** (правка 138 / Bonsai) URL указывает на ZIP: после скачивания извлечь
    *  ТОЛЬКО эти файлы (рекурсивный поиск по архиву) в каталог relPath. */
   extractFiles?: string[]
@@ -97,135 +94,6 @@ export const MODELS: ModelDef[] = [
     sizeLabel: '~9.8 MB',
     category: 'preview',
   },
-  {
-    id: 'llm_assistant',
-    label: "Assistant - Gemma 4 12B (Q4_K_M, omni)",
-    relPath: 'llm/gemma-4-12b-it-Q4_K_M.gguf',
-    url: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf?download=true',
-    sizeBytes: gb(7.12),
-    sizeLabel: '~7.1 GB',
-    category: 'llm',
-  },
-  {
-    id: 'llm_assistant_q3',
-    label: "Assistant - Gemma 4 12B (Q3_K_M, light, ~8 GB VRAM)",
-    relPath: 'llm/gemma-4-12b-it-Q3_K_M.gguf',
-    url: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q3_K_M.gguf?download=true',
-    sizeBytes: gb(5.6),
-    sizeLabel: '~5.6 GB',
-    category: 'llm',
-  },
-  {
-    id: 'llm_assistant_q5',
-    label: "Assistant - Gemma 4 12B (Q5_K_M, quality, ~12 GB VRAM)",
-    relPath: 'llm/gemma-4-12b-it-Q5_K_M.gguf',
-    url: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q5_K_M.gguf?download=true',
-    sizeBytes: gb(8.6),
-    sizeLabel: '~8.6 GB',
-    category: 'llm',
-  },
-  {
-    id: 'llm_assistant_mmproj',
-    label: "Vision Projector (mmproj BF16) - for LLM vision",
-    relPath: 'llm/mmproj-BF16.gguf',
-    url: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/mmproj-BF16.gguf?download=true',
-    sizeBytes: 175 * 1024 * 1024,
-    sizeLabel: '~175 MB',
-    category: 'llm',
-  },
-  // ── Qwen3.5 9B (правка 52) — альтернативная LLM для слабых машин: ──
-  // мультимодальная (картинка + видео), ~5.7 ГБ Q4 против 7.1 у Gemma 12B,
-  // гибрид Gated DeltaNet → экономнее по KV-кэшу. Нужен свежий llama.cpp
-  // (архитектура qwen35) — пользователь тестирует на своём железе.
-  // Файлы в подпапке llm/qwen3.5-9b/, чтобы не конфликтовать с Gemma.
-  {
-    id: 'llm_assistant_qwen',
-    label: "Assistant - Qwen3.5 9B (Q4_K_M, vision, light VRAM)",
-    relPath: 'llm/qwen3.5-9b/Qwen3.5-9B-Q4_K_M.gguf',
-    url: 'https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf?download=true',
-    sizeBytes: gb(5.68),
-    sizeLabel: '~5.7 GB',
-    category: 'llm',
-  },
-  {
-    id: 'llm_assistant_qwen_mmproj',
-    label: "Vision Projector (Qwen3.5 mmproj F16) - vision for Qwen3.5 9B",
-    relPath: 'llm/qwen3.5-9b/mmproj-F16.gguf',
-    url: 'https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf?download=true',
-    sizeBytes: 918 * 1024 * 1024,
-    sizeLabel: '~920 MB',
-    category: 'llm',
-  },
-  // ── (правка 138) Bonsai 2 27B — тернарная LLM-ассистент на форке llama.cpp
-  // (PrismML). Движок и модели живут в <bonsai_dir> (по умолчанию
-  // <проект>/Bonsai_2_27B), НЕ в models ComfyUI. Точная версия движка
-  // подобрана под кванты модели (prism-b10709-9a9394a, CUDA 12.4).
-  {
-    id: 'bonsai_engine_bin',
-    label: "Bonsai: llama-server engine (PrismML b10709, binaries)",
-    relPath: 'llama.cpp/',
-    target: 'bonsai',
-    url: 'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10709-9a9394a/llama-prism-b10709-9a9394a-bin-win-cuda-12.4-x64.zip',
-    sizeBytes: 242 * 1024 * 1024,
-    sizeLabel: '~242 MB',
-    category: 'llm',
-    extractFiles: [
-      'llama-server.exe',
-      'llama-server-impl.dll',
-      'llama-common.dll',
-      'llama.dll',
-      'mtmd.dll',
-      'ggml.dll',
-      'ggml-base.dll',
-      'ggml-cpu.dll',
-      'ggml-cuda.dll',
-      'ggml-rpc.dll',
-    ],
-  },
-  {
-    id: 'bonsai_engine_cudart',
-    label: "Bonsai: engine - CUDA DLL (cublas/cudart 12.4)",
-    relPath: 'llama.cpp/',
-    target: 'bonsai',
-    url: 'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10709-9a9394a/cudart-llama-bin-win-cuda-12.4-x64.zip',
-    sizeBytes: 373 * 1024 * 1024,
-    sizeLabel: '~373 MB',
-    category: 'llm',
-    extractFiles: ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudart64_12.dll'],
-  },
-  {
-    id: 'bonsai_model',
-    label: "Bonsai 2 27B - model (PQ2_0, ternary, vision)",
-    relPath: 'models/Ternary-Bonsai-2-27B-PQ2_0.gguf',
-    target: 'bonsai',
-    url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main/Ternary-Bonsai-2-27B-PQ2_0.gguf?download=true',
-    sizeBytes: 7206168928,
-    sizeLabel: '~7.2 GB',
-    category: 'llm',
-  },
-  {
-    id: 'bonsai_mmproj',
-    label: 'Bonsai 2 27B — Vision Projector (mmproj Q8_0)',
-    relPath: 'models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
-    target: 'bonsai',
-    url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf?download=true',
-    sizeBytes: 629246976,
-    sizeLabel: '~630 MB',
-    category: 'llm',
-  },
-  {
-    id: 'bonsai_model_light',
-    label: "Bonsai 2 27B - model (PTQ1_0, lightest, ~6 GB, for cards ≤8 GB)",
-    relPath: 'models/Ternary-Bonsai-2-27B-PTQ1_0.gguf',
-    target: 'bonsai',
-    url: 'https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main/Ternary-Bonsai-2-27B-PTQ1_0.gguf?download=true',
-    sizeBytes: 595 * 1024 * 1024,
-    sizeLabel: '~5.95 GB',
-    category: 'llm',
-    // Опциональная: качается только вручную; раннер подхватит её, если
-    // основной PQ2_0 не скачан, а PTQ1_0 есть.
-    optional: true,
-  },
 ]
 
 /** Group by category for UI display */
@@ -236,5 +104,4 @@ export const MODEL_CATEGORIES: { key: ModelDef['category']; label: string }[] = 
   { key: 'lora', label: 'LoRA' },
   { key: 'upscaler', label: 'Upscaler' },
   { key: 'preview', label: 'Preview' },
-  { key: 'llm', label: "LLM assistant" },
 ]

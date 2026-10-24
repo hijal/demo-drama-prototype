@@ -8,7 +8,6 @@
  * ComfyUI ModelPreviewOverrideKJ events are delivered to us.
  */
 import WebSocket from 'ws'
-import { onQueueDrained } from '@/lib/vram-arbiter'
 
 const COMFY_BASE_URL = (process.env.COMFY_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '')
 const COMFY_WS_URL = COMFY_BASE_URL.replace(/^http/, 'ws') + '/ws'
@@ -89,8 +88,6 @@ let connecting = false
 let activePromptId: string | null = null
 /** The prompt_id currently executing (from 'executing' WS event). */
 let executingPromptId: string | null = null
-/** Предыдущее значение queue_remaining из status-событий ComfyUI. */
-let lastQueueRemaining = 0
 
 /** Set the active prompt_id (called when we submit a job). */
 export function setActivePrompt(id: string) {
@@ -113,18 +110,6 @@ function connect() {
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString())
-
-        // Опустошение очереди → фоновая выгрузка моделей MiniMax из VRAM
-        // (vram-arbiter: GPU освобождается сразу после завершения генераций)
-        if (msg.type === 'status') {
-          const remaining = msg.data?.status?.exec_info?.queue_remaining
-          if (typeof remaining === 'number') {
-            if (remaining === 0 && lastQueueRemaining > 0) {
-              void onQueueDrained()
-            }
-            lastQueueRemaining = remaining
-          }
-        }
 
         // Standard progress events (one per sampler node/pass)
         if (msg.type === 'progress' && msg.data?.prompt_id) {

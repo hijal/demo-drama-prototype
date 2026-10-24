@@ -852,14 +852,14 @@ export function useVideoGen() {
         if (isTimeout) {
           errMsg = "Request timeout (120 s). The server is probably waiting for the GPU to become free. Try again."
         } else if (isNetwork) {
-          errMsg = "The web server is unavailable (ERR_CONNECTION_REFUSED). Make sure start.bat is running."
+          errMsg = "The web server is unavailable (ERR_CONNECTION_REFUSED). Make sure the Web UI server is running."
         } else {
           errMsg = err instanceof Error ? err.message : String(err)
         }
         // (правка 141) Если ComfyUI не запущен — показываем понятное сообщение
         const isComfyDown = /ComfyUI не отвечает|Failed to load resource|502|Bad Gateway|ERR_CONNECTION_REFUSED/i.test(errMsg)
         const displayMsg = isComfyDown
-          ? "ComfyUI is not running or not responding. Run start.bat and wait for ComfyUI to launch (30-90 seconds)."
+          ? "ComfyUI is not running or not responding. Start ComfyUI (Colab: rerun Step 7) and wait 30-90 seconds."
           : errMsg
         console.error(`[gen] generate() CAUGHT: type=${isTimeout ? 'timeout' : isNetwork ? 'network' : 'other'}`, err, `| displayMsg: ${displayMsg}`)
         queue.setStatus(queueId, 'error', displayMsg)
