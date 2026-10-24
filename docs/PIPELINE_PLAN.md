@@ -175,14 +175,28 @@ CREATE TABLE episodes (id TEXT PRIMARY KEY, project_id TEXT, number INTEGER, tit
 CREATE TABLE scenes (id TEXT PRIMARY KEY, episode_id TEXT, number INTEGER, duration REAL, spec_json TEXT,
   chain_group TEXT /*scenes sharing location+continuity*/, approved_clip_id TEXT);
 CREATE TABLE clips (id TEXT PRIMARY KEY, scene_id TEXT, take INTEGER, prompt TEXT, params_json TEXT,
-  r2_key TEXT, qa_json TEXT, qa_pass INTEGER, owner_note TEXT, status TEXT, created_at INTEGER);
+  r2_key TEXT, qa_json TEXT, qa_pass INTEGER, owner_note TEXT,
+  status TEXT /*queued|rendering|qa|ready|failed|stale*/,
+  asset_versions_json TEXT /*{assetId: version} used to build this take*/,
+  context_clip_id TEXT /*previous clip whose tail was pinned (chaining), NULL if none*/,
+  script_version_id TEXT, created_at INTEGER);
 CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT, type TEXT /*asset_image|asset_edit|asset_sheet|clip|qa|assemble*/,
-  payload_json TEXT, status TEXT /*queued|claimed|running|done|failed*/, priority INTEGER,
-  claimed_by TEXT, claimed_at INTEGER, attempts INTEGER, error TEXT, created_at INTEGER, updated_at INTEGER);
+  payload_json TEXT, status TEXT /*queued|claimed|running|done|failed|cancelled*/, priority INTEGER,
+  claimed_by TEXT, claimed_at INTEGER, claim_token TEXT, lease_until INTEGER, attempt INTEGER,
+  error TEXT, created_at INTEGER, updated_at INTEGER);
 CREATE TABLE renders (id TEXT PRIMARY KEY, project_id TEXT, scope TEXT /*episode:<id>|film|series*/,
-  r2_key TEXT, srt_r2_key TEXT, created_at INTEGER);
+  r2_key TEXT, srt_r2_key TEXT, clip_ids_json TEXT /*ordered clips used*/, status TEXT /*ready|stale*/,
+  created_at INTEGER);
 CREATE TABLE gpu_workers (id TEXT PRIMARY KEY, last_seen INTEGER, info_json TEXT);
 ```
+### 5.2a Dependency & invalidation rules
+Every derived thing records exactly what it was built from (`clips.asset_versions_json`, `clips.context_clip_id`, `clips.script_version_id`, `renders.clip_ids_json`). When an input changes, dependents become **stale** — never silently kept, never auto-deleted:
+1. **Asset re-approved** (new character/location/prop version): every clip whose `asset_versions_json` has an older version of it → `stale`. UI: "8 scenes use Gajju's old look — Regenerate all / Keep". Default suggestion: regenerate.
+2. **Approved take of a scene replaced** (owner picks another take or a regenerate wins): downstream clips in the same `chain_group` whose `context_clip_id` chain leads to the old take → `stale` (their pinned head no longer matches). Non-chained scenes are unaffected.
+3. **Script re-approved:** diff scenes by content hash; changed scenes' clips → `stale`; unchanged scenes keep their takes.
+4. **Any render** whose `clip_ids_json` contains a clip that is no longer the approved take or is stale → `stale`. "Make final video" warns when stale clips exist and lists them.
+5. Regenerating stale clips is a normal queued job; QA and owner review apply as usual. Old takes stay in history.
+
 ### 5.3 R2 key layout
 `projects/<pid>/assets/<assetId>/v<n>/{portrait.png,sheet.png,front.png,…,voice.wav}` ·
 `projects/<pid>/clips/<sceneId>/take<k>.mp4` · `projects/<pid>/qa/<clipId>/f<i>.jpg` ·
@@ -192,7 +206,10 @@ CREATE TABLE gpu_workers (id TEXT PRIMARY KEY, last_seen INTEGER, info_json TEXT
 - `POST /api/gpu/heartbeat` `{workerId, gpu, vramFree}` every 15 s → UI shows "GPU online".
 - `POST /api/gpu/claim` → atomically picks highest-priority `queued` job (UPDATE … WHERE status='queued' … RETURNING), returns job + presigned R2 GET URLs for inputs and PUT URLs for outputs.
 - `POST /api/gpu/jobs/:id/progress` `{pct, stage}` · `POST /api/gpu/jobs/:id/log` `{lines[]}` (→ LogHub DO) · `POST /api/gpu/jobs/:id/done` `{outputs}` · `POST /api/gpu/jobs/:id/fail` `{error}` (retry ≤2 then failed).
-- Stale claims (no progress 10 min) → back to `queued`.
+- **Leases & claim tokens (exactly-once results):** every claim generates a fresh random `claim_token` and `lease_until = now + 10 min`; `jobs` gets columns `claim_token TEXT, lease_until INTEGER, attempt INTEGER`. Every progress/log/done/fail call must send `{claim_token}`; the Worker updates only `WHERE id=? AND claim_token=? AND status IN ('claimed','running')` and each accepted progress/heartbeat extends `lease_until`.
+- A cron (or the next claim call) re-queues jobs whose `lease_until` passed: status `queued`, `attempt+1`, `claim_token = NULL` (old token is now invalid).
+- A late `done`/`fail` from an old worker → **409, ignored**. Outputs are written to per-attempt R2 keys (`…/take<k>-a<attempt>.mp4`), so a late upload can never overwrite the accepted one; a cleanup cron deletes R2 objects not referenced by any `clips` row after 24 h.
+- `done` is idempotent: the same token twice → 200 no-op.
 - Worker exits (and notebook deletes runtime) after `IDLE_MINUTES` with no claimable jobs.
 
 ### 5.5 Owner-facing UI (web/)
@@ -269,7 +286,7 @@ SCENE <n> | <seconds>s | <title>
 - E01 header missing TITLE/ASPECT; E02 ASPECT not 16:9/9:16.
 - E03 any `@ref` used but not defined; E04 duplicate `@id`.
 - E05 character without visual description (needs FACE/HAIR/OUTFIT, or SPECIES+LOOK); voice_only exempt.
-- E06 scene duration missing or outside **2.5–30 s** (H3 limit 30 s; prefer ≤12 s).
+- E06 scene duration missing or outside **2.5–29.9 s** (rendered length is longer, see §7.2; prefer ≤12 s).
 - E07 SHOT durations don't sum to SCENE duration (±0.5 s).
 - E08 dialogue/SFX `at:` beyond scene/shot duration.
 - E09 speaker of a line not in CAST.
@@ -296,8 +313,12 @@ Input: raw text + validator report + this spec + 1 full example. Output: **only*
 - Always end visual text with "No text anywhere in frame." (avoids logos/text; still not perfect — a chip bag got a logo once).
 - Prompts of 300–450 words worked well. See Appendix A for two complete working prompts.
 
-### 7.2 Durations / frames
-- 24 fps; the UI/engine snaps frames (e.g. 145→6.0 s, 169→6.8 s, 193→8.2 s, 241→10.3 s, 121→5.3 s, 97→3.9 s). Real file length ≈ requested +0.3–0.6 s. Account for this in assembly and subtitle timing (use ffprobe actual duration).
+### 7.2 Durations / frames (verified against code and ffprobe)
+- 24 fps. `framesForDuration(s)` in `minimax-h3-template.ts` = `round(s·24)` rounded **up** to the next `17n+5` frame count (H3 block grid). So the file is longer than requested:
+  2.5 s→73 f (3.04 s) · 4 s→107 f (4.46 s) · 5 s→124 f (5.17 s) · 6 s→158 f (6.58 s) · 7 s→175 f (7.29 s) · 8 s→192 f (8.00 s) · 10 s→243 f (10.13 s) · 30 s→736 f (30.67 s).
+- These match the ffprobe lengths of the clips rendered in the session (6.58, 7.29, 8.71, 10.83 s). The number shown in the old UI's frame box is NOT the rendered length.
+- **Max per clip:** the UI's manual limit is 719 frames (29.96 s). Request ≤ 29.9 s (→ 719 f); 30 s → 736 f exceeds it. Validator E06 should use this.
+- Assembly and subtitles must use the **actual** duration (ffprobe), never the script number. Optionally trim each clip to the script duration at assembly (cut the tail) when exact pacing matters.
 
 ### 7.3 Reference strategy that worked
 1. Generate the first scene that shows the main character+location clearly in **text mode**.
@@ -361,14 +382,20 @@ Note: the owner's Cloudflare login for wrangler is needed (`npx wrangler login`,
 ### Phase 5 — Automatic scene prompts, QA, regeneration, voices, chaining  (status: NOT STARTED)
 1. `prompt-writer` LLM: approved script scene + approved asset descriptions + reference slot map → H3 Ref2VA prompt (Appendix A style). Deterministic reference picking: location sheet view + each cast member's best view (≤9 images) + each speaking character's voice sample as `<Audio N>` (≤3).
 2. Clips rendered with `non_diegetic_music: N/A`.
-3. QA job: extract 6 frames (start/middle/end of each shot) → vision LLM with scene KEYFRAME/FRAME/CAST → `{pass, issues[], fix_hint}`; fail ⇒ new take with fix_hint merged into prompt (max 2 auto retakes) ⇒ then flag for owner.
+3. QA job = **visual + audio**, result `{pass, issues[], fix_hint, scores}`; fail ⇒ new take with fix_hint merged into prompt (max 2 auto retakes) ⇒ then flag for owner.
+   - **Visual:** ~8 frames (start/middle/end of each shot; or a low-res proxy clip if the VLM accepts video input — Qwen3-VL does) → vision LLM with KEYFRAME/FRAME/CAST: cast present, faces inside frame, action visible, prop variant state.
+   - **Dialogue/ASR:** run `faster-whisper` (large-v3) on the GPU worker → transcript + word timestamps; compare with the script lines (normalized WER; flag if > ~25 % or a line is missing / extra speech appears).
+   - **Voice consistency:** speaker embedding (e.g. SpeechBrain ECAPA or resemblyzer) of each dialogue segment vs the character's approved voice sample; flag below a cosine threshold (calibrate on the first approved takes).
+   - **Lip-sync (stretch goal):** SyncNet-style offset/confidence on `LIPSYNC: required` shots; until then mark lip-sync as "owner check" in the UI.
+   - Still frames alone cannot judge speech, voice or lip-sync — these checks are why the audio step exists.
 4. Owner *Regenerate* with optional note (note → prompt-writer).
 5. Chaining: scenes with same `AT` location and `TRANSITION: cut` in sequence form a `chain_group`; test **ComfyUI-H3-Motion-Context** (GPL-3; `context_length` 22, `audio_context_length` 18; resolution must match; quality drifts down long chains — cap chain length ~4) vs **ComfyUI_MiniMaxH3_Director** (Apache-2.0, inter-segment guidance). Keep the better one.
 **Done when:** "The Stir" (burrito script) renders end-to-end with ≤1 owner action per scene.
 
 ### Phase 6 — Assembly, music, subtitles, final player  (status: NOT STARTED)
-1. `assemble` job on GPU worker: approved takes in order, transitions, actual durations (ffprobe), one music track (owner-uploaded mp3 or generated later), duck under dialogue, `.srt` from script lines (`at:` offsets + scene start), optional burn-in, 1080p H.264 + AAC 48 kHz.
-2. UI Final screen: player + download mp4/srt; per episode and whole film/series.
+1. `assemble` job on GPU worker: approved takes in order, transitions, actual durations (ffprobe, §7.2), one music track (owner-uploaded mp3 or generated later), duck under dialogue, 1080p H.264 + AAC 48 kHz (resample H3's 32 kHz audio).
+2. **Subtitles from what was actually spoken:** use each clip's ASR word timestamps (from QA) + the clip's real start offset in the final timeline; text = the script line (correct spelling) aligned to the ASR timing (fall back to script `at:` only if ASR found no speech). Optional burn-in.
+3. UI Final screen: player + download mp4/srt; per episode and whole film/series.
 **Done when:** jungle Episode 01 (90 s) final video plays in the UI and on the owner's Mac.
 
 ### Afterwards
@@ -402,7 +429,9 @@ Also: ComfyUI has `MiniMaxH3AddGuide` (anchor an image at any frame) — the cur
 7. Typing long prompts into the UI via automation drops characters → set textarea values programmatically (React native value setter + `input` event).
 8. G4 is detected as "RTX PRO 6000 Blackwell" → flags `--reserve-vram 3 --highvram`; L4 must NOT use `--highvram`.
 9. H3 audio is 32 kHz (see §7.5).
-10. The H3 community license reportedly may not cover some regions (EU/UK/KR/US per a node README) — owner uses it for personal research; just don't plan commercial distribution.
+10. Fixed after an external review (2026-10-25, branch `drama-pipeline`): gallery folder names `.`/`..` escaped `output/` (sanitizer now rejects dot-names, `folderPath` checks containment, generate route uses the same sanitizer); model downloads accepted files ≥90 % complete (root cause: `sizeBytes` used GiB for decimal GB) → exact byte sizes + exact Content-Length check; `doDownload` swallowed errors so retries never ran → errors now propagate, retry+Range resume verified with a local test server; "Repeat generation" kept old refs/frames → restore now replaces them; Frames mode output 1920×1088 → now cropped to 1920×1080 like other modes; exported workflow JSON got the new upscaler inputs.
+11. The old UI lets the duration slider reach 30 s, which renders 736 frames (> the 719 manual limit) — clamp to 29.9 s if the old UI is kept.
+12. The H3 community license reportedly may not cover some regions (EU/UK/KR/US per a node README) — owner uses it for personal research; just don't plan commercial distribution.
 
 ---
 

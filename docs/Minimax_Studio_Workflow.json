@@ -158,6 +158,8 @@
       "mode.height": 1088,
       "align": 32,
       "enable_chunking": true,
+      "enable_temporal_chunking": true,
+      "force_unload": true,
       "device": "cuda",
       "precision": "fp16",
       "latent": ["46:35", 0]

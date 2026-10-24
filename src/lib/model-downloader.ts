@@ -80,13 +80,8 @@ export function modelExists(modelId: string): boolean {
     }
     const abs = modelAbsPath(model)
     if (!existsSync(abs)) return false
-    // (правка 141) Проверка размера: файл должен быть близок к ожидаемому (±10%)
-    // Раньше: > 1 MB считался валидным — но обрезанный файл (например, 5 MB из 10 MB)
-    // тоже проходил, и ComfyUI падал при загрузке.
-    const stat = statSync(abs)
-    const expected = model.sizeBytes
-    const tolerance = Math.max(1_000_000, expected * 0.1) // 10% или 1 MB, что больше
-    return stat.size >= expected - tolerance && stat.size <= expected + tolerance
+    // sizeBytes — точный размер файла на HF: обрезанный файл не считается готовым
+    return statSync(abs).size === model.sizeBytes
   } catch {
     return false
   }
@@ -282,8 +277,30 @@ async function doDownloadWithRetry(
   resumeBytes: number,
   maxRetries = 2,
 ): Promise<void> {
+  try {
+    await runWithRetry(model, tmpPath, finalPath, state, controller, resumeBytes, maxRetries)
+  } catch (e) {
+    const isCancel = e instanceof Error && (e.message === 'cancelled' || e.name === 'AbortError')
+    state.status = isCancel ? 'cancelled' : 'error'
+    state.error = isCancel ? "Canceled by user" : (e instanceof Error ? e.message : String(e))
+    state.speed = 0
+    console.error(`[download] ${isCancel ? 'CANCELLED' : 'ERROR'}: ${model.label}${isCancel ? '' : `: ${state.error}`}`)
+  } finally {
+    abortControllers.delete(model.id)
+  }
+}
+
+async function runWithRetry(
+  model: ModelDef,
+  tmpPath: string,
+  finalPath: string,
+  state: DownloadState,
+  controller: AbortController,
+  resumeBytes: number,
+  maxRetries: number,
+): Promise<void> {
   let lastError: Error | null = null
-  
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       if (attempt > 0) {
@@ -296,6 +313,9 @@ async function doDownloadWithRetry(
         } catch {
           resumeBytes = 0
         }
+        state.bytesReceived = resumeBytes
+        state.totalBytes = null
+        console.log(`[download] retry ${attempt}/${maxRetries}: ${model.label}`)
       }
       
       await doDownload(model, tmpPath, finalPath, state, controller, resumeBytes)
@@ -444,29 +464,19 @@ async function doDownload(
       })
     })
 
-    // Финальная валидация размера: обрезанный файл (>1 МБ, но не полный)
-    // раньше считался «готовым» и валился уже ComfyUI при загрузке.
-    // (правка 143) Увеличили допустимую ошибку до 1% — для больших файлов
-    // (20 ГБ) разница в 100 МБ может быть из-за округления или буферизации.
-    try {
-      const finalSize = statSync(tmpPath).size
-      const tolerance = Math.max(100 * 1024, model.sizeBytes * 0.01) // 1% или 100 КБ
-      if (model.sizeBytes > 1_000_000 && finalSize < model.sizeBytes - tolerance) {
-        // (правка 144) Если файл скачан более чем на 90% — считаем его валидным.
-        // HuggingFace иногда обрывает соединение в конце, и последние мегабайты
-        // не доходят, но файл практически полный.
-        const completion = finalSize / model.sizeBytes
-        if (completion >= 0.9) {
-          console.log(`[download] File ${Math.round(completion * 100)}% complete — accepting as valid`)
-        } else {
-          throw new Error(
-            `The file was not downloaded completely (${(finalSize / 1024 ** 3).toFixed(2)} GB of ${(model.sizeBytes / 1024 ** 3).toFixed(2)} GB) - click “Download” again`,
-          )
-        }
-      }
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("not downloaded completely")) throw e
-      /* stat упал — не блокируем */
+    // Финальная валидация размера: файл должен совпасть байт в байт с
+    // Content-Length сервера (или точным sizeBytes, если заголовка не было).
+    // Неполный файл остаётся .downloading — следующая попытка докачает его.
+    const expected = state.totalBytes ?? model.sizeBytes
+    const finalSize = statSync(tmpPath).size
+    if (finalSize < expected) {
+      throw new Error(
+        `The file was not downloaded completely (${(finalSize / 1024 ** 3).toFixed(2)} GB of ${(expected / 1024 ** 3).toFixed(2)} GB) - click “Download” again`,
+      )
+    }
+    if (finalSize > expected) {
+      try { unlinkSync(tmpPath) } catch { /* ignore */ }
+      throw new Error(`The downloaded file is larger than expected (${finalSize} > ${expected} bytes) and was deleted - click “Download” again`)
     }
 
     // Move tmp → final
@@ -494,19 +504,10 @@ async function doDownload(
     // иначе карта растёт всю сессию.
     activeDownloads.delete(model.id)
   } catch (e) {
-    const isCancel = e instanceof Error && (e.message === 'cancelled' || e.name === 'AbortError')
-    state.status = isCancel ? 'cancelled' : 'error'
-    state.error = isCancel ? "Canceled by user" : (e instanceof Error ? e.message : String(e))
-    state.speed = 0
-    // (фикс) Логирование ошибок — раньше при сбое не было понятно, что произошло
-    console.error(`[download] ${isCancel ? 'CANCELLED' : 'ERROR'}: ${model.label}`)
-    if (!isCancel) {
-      console.error(`[download] Error: ${state.error}`)
-    }
-    // Частичный файл СОХРАНЯЕМ: повторная загрузка докачает с места обрыва,
-    // а не начнёт 21 ГБ заново. Полный файл после валидации уже переименован.
-  } finally {
-    abortControllers.delete(model.id)
+    // Частичный файл СОХРАНЯЕМ: повторная попытка докачает с места обрыва.
+    // Состояние ошибки выставляет doDownloadWithRetry после последней попытки.
+    console.error(`[download] attempt failed: ${model.label}: ${e instanceof Error ? e.message : String(e)}`)
+    throw e
   }
 }
 

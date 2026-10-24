@@ -592,8 +592,10 @@ export function buildMiniMaxH3Workflow(p: MiniMaxH3Params): Record<string, unkno
   // (правка 156) В режиме flf final = lowRes (ceil32) — апскейлер делает
   // early-return (w_out == w_in && h_out == h_in), нет масштабирования.
   // В других режимах — targetDimensions (номинал) или finalRes MP.
+  // В flf gen = lowRes (ceil32), а итог кропается до номинала targetDimensions
+  // (1920×1088 → 1920×1080) — так же, как в остальных режимах и в метаданных.
   const final = flfSinglePass
-    ? computeFinalDimensions(lowRes.w, lowRes.h)
+    ? computeFinalDimensions(p.targetDimensions?.width ?? lowRes.w, p.targetDimensions?.height ?? lowRes.h)
     : p.targetDimensions
       ? computeFinalDimensions(p.targetDimensions.width, p.targetDimensions.height)
       : finalDimsFromMegapixels(aspect, finalRes)

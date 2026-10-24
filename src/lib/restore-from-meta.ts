@@ -276,6 +276,13 @@ export async function restoreFromMeta(filePath: string): Promise<boolean> {
     // переустановка ComfyUI). «Повторить» с несуществующим файлом падал бы
     // посреди генерации сырым FileNotFoundError. Проверяем существование и
     // честно предупреждаем, что восстановлены не все.
+    // Рефы и кадры ЗАМЕНЯЮТ текущие в форме (а не дополняют): если в
+    // метаданных их нет или все файлы потеряны — форма очищается.
+    patch.refs = []
+    patch.startFrame = null
+    patch.endFrame = null
+    let restoredRefCount = 0
+
     const refAndFramePaths: string[] = [
       ...metaRefs.map((r) => r.path ?? ''),
       ...frameSlots.map((f) => f.path),
@@ -298,9 +305,8 @@ export async function restoreFromMeta(filePath: string): Promise<boolean> {
 
       const presentRefs = metaRefs.filter((_, i) => exists[i])
       const missingRefs = metaRefs.length - presentRefs.length
-      if (presentRefs.length > 0) {
-        patch.refs = mapRefs(presentRefs)
-      }
+      patch.refs = mapRefs(presentRefs)
+      restoredRefCount = presentRefs.length
       if (missingRefs > 0) {
         toast.warning(`${missingRefs} ref. not found in ComfyUI`, {
           description: "Files have been removed from input/. Other parameters have been restored.",
@@ -370,7 +376,7 @@ export async function restoreFromMeta(filePath: string): Promise<boolean> {
     const restoredFrames = (patch.startFrame ? 1 : 0) + (patch.endFrame ? 1 : 0)
     const bits: string[] = ["Prompt", 'seed', `mode "${modeShort}»`]
     if (restoredFrames > 0) bits.push(`${restoredFrames} frame(s)`)
-    if (metaRefs.length > 0) bits.push(`${metaRefs.length} ref.`)
+    if (restoredRefCount > 0) bits.push(`${restoredRefCount} ref.`)
     toast.success("Generation parameters restored", {
       description: bits.join(', ') + " loaded into the generation form.",
     })

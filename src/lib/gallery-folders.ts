@@ -16,20 +16,27 @@ import { getAppConfig } from './app-config'
 /** Максимальная длина имени папки (защита от экзотики в URL/файловой системе). */
 const MAX_NAME_LEN = 60
 
-/** Санитизировать имя папки: один сегмент, без недопустимых символов. */
+/** Санитизировать имя папки: один сегмент, без недопустимых символов.
+ *  Имена, начинающиеся с точки ('.', '..', скрытые), отбрасываются —
+ *  иначе '..' уводил путь из output в корень ComfyUI. */
 export function sanitizeFolderName(name: string): string {
-  return path
+  const safe = path
     .basename(String(name ?? ''))
     .replace(/[\\/:*?"<>|]+/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_NAME_LEN)
+  return safe.startsWith('.') ? '' : safe
 }
 
 /** Путь к подпапке внутри output (гарантированно один уровень). */
 export function folderPath(folder: string): string {
+  const root = path.resolve(getAppConfig().outputDir)
   const safe = sanitizeFolderName(folder)
-  return safe ? path.join(getAppConfig().outputDir, safe) : getAppConfig().outputDir
+  if (!safe) return root
+  const dir = path.resolve(root, safe)
+  if (path.dirname(dir) !== root) throw new Error(`Folder path escapes output: ${folder}`)
+  return dir
 }
 
 /** Список папок проекта (подпапки первого уровня в output). Отсортирован. */
@@ -72,9 +79,8 @@ export async function renameGalleryFolder(
   if (!fromSafe) return { ok: false, error: "Invalid folder name" }
   if (!toSafe) return { ok: false, error: "Enter a new folder name" }
   if (fromSafe === toSafe) return { ok: true, name: toSafe }
-  const root = getAppConfig().outputDir
-  const srcDir = path.join(root, fromSafe)
-  const dstDir = path.join(root, toSafe)
+  const srcDir = folderPath(fromSafe)
+  const dstDir = folderPath(toSafe)
   try {
     await fs.access(dstDir)
     return { ok: false, error: `Folder "${toSafe}» already exists` }

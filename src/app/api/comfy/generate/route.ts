@@ -7,6 +7,7 @@ import { readStaged, deleteStaged } from '@/lib/staging'
 import { recordPendingMeta } from '@/lib/pending-meta'
 import { loadLoras, listLoraFiles, TURBO_LORA_NAME } from '@/lib/loras-config'
 import { getAppConfig } from '@/lib/app-config'
+import { sanitizeFolderName } from '@/lib/gallery-folders'
 import type { MiniMaxH3Params } from '@/lib/comfy/minimax-h3-template'
 
 /**
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     // (правка 91) Папка проекта: один санитизированный сегмент, максимум 60
     // символов — дальше уходит в filename_prefix VHS («folder/Minimax_Studio»)
     // и в пути сайдкаров. Клиент шлёт '' (общая) или имя существующей папки.
-    body.outputSubfolder = path.basename(String(body.outputSubfolder ?? '')).replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 60)
+    body.outputSubfolder = sanitizeFolderName(String(body.outputSubfolder ?? ''))
 
     // Upload base64 images if provided
     if (body.refImagesBase64?.length) {
