@@ -430,8 +430,9 @@ Also: ComfyUI has `MiniMaxH3AddGuide` (anchor an image at any frame) — the cur
 8. G4 is detected as "RTX PRO 6000 Blackwell" → flags `--reserve-vram 3 --highvram`; L4 must NOT use `--highvram`.
 9. H3 audio is 32 kHz (see §7.5).
 10. Fixed after an external review (2026-10-25, branch `drama-pipeline`): gallery folder names `.`/`..` escaped `output/` (sanitizer now rejects dot-names, `folderPath` checks containment, generate route uses the same sanitizer); model downloads accepted files ≥90 % complete (root cause: `sizeBytes` used GiB for decimal GB) → exact byte sizes + exact Content-Length check; `doDownload` swallowed errors so retries never ran → errors now propagate, retry+Range resume verified with a local test server; "Repeat generation" kept old refs/frames → restore now replaces them; Frames mode output 1920×1088 → now cropped to 1920×1080 like other modes; exported workflow JSON got the new upscaler inputs.
-11. The old UI lets the duration slider reach 30 s, which renders 736 frames (> the 719 manual limit) — clamp to 29.9 s if the old UI is kept.
-12. The H3 community license reportedly may not cover some regions (EU/UK/KR/US per a node README) — owner uses it for personal research; just don't plan commercial distribution.
+11. FLF follow-up: browser metadata now uses cropped output dimensions. Repeat stores exact pixel dimensions instead of converting them to MP (including nonstandard ratios and legacy aligned outputs); changing the resolution or first frame clears that override. Regression tests: `npm test`.
+12. The old UI lets the duration slider reach 30 s, which renders 736 frames (> the 719 manual limit) — clamp to 29.9 s if the old UI is kept.
+13. The H3 community license reportedly may not cover some regions (EU/UK/KR/US per a node README) — owner uses it for personal research; just don't plan commercial distribution.
 
 ---
 

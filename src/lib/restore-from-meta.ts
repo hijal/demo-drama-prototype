@@ -193,29 +193,23 @@ export async function restoreFromMeta(filePath: string): Promise<boolean> {
       patch.chunkFFThreshold = params.chunk_ff_threshold
     }
 
-    // Resolution (правка 124): известный номинал → режим пресета
-    // (freeResolution off, MP = 0) — повтор воспроизводит ТОЧНЫЕ размеры
-    // (16:9 1080p → 1920×1080). Иначе — свободное разрешение по MP.
-    // (правка 158) FL2VA: номинал из flfNominalDimensions (кадр + пресет UI) —
-    // он НЕ входит в PRESET_RESOLUTIONS (напр. 854x480 для кадра 16:9), но это
-    // РЕАЛЬНЫЙ размер генерации. Восстанавливаем как свободное разрешение (MP),
-    // чтобы UI-бейдж совпадал с реальным.
+    // Restore exact FLF pixels, including nonstandard ratios and old aligned
+    // outputs. Converting them to MP changes dimensions on the next generation.
+    patch.targetDimensions = null
     const metaRes = typeof params.resolution === 'string' ? params.resolution.trim() : ''
     const metaFlfRes = typeof params.flf_resolution === 'string' ? params.flf_resolution.trim() : ''
     const isFlfMode = (params.generation_mode || '').toLowerCase() === 'flf'
 
-    if (isFlfMode && metaFlfRes) {
-      // FL2VA: точный номинал из метаданных → свободное разрешение по MP
-      const flfMatch = metaFlfRes.match(/(\d+)\s*x\s*(\d+)/i)
+    if (isFlfMode && (metaFlfRes || metaRes)) {
+      const flfMatch = (metaFlfRes || metaRes).match(/^(\d+)\s*x\s*(\d+)$/i)
       if (flfMatch) {
         const fw = parseInt(flfMatch[1], 10)
         const fh = parseInt(flfMatch[2], 10)
         if (fw > 0 && fh > 0) {
-          const flfMP = Math.round((fw * fh) / 1e6 * 100) / 100
-          patch.finalResolution = flfMP
-          patch.freeResolution = true
-          // resolution = номинал flf (ориентация из кадра)
-          patch.resolution = metaFlfRes
+          patch.targetDimensions = { width: fw, height: fh }
+          patch.finalResolution = 0
+          patch.freeResolution = false
+          patch.resolution = `${fw}x${fh}`
         }
       }
     } else if (metaRes && PRESET_RESOLUTIONS.has(metaRes)) {

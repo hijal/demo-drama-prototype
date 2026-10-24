@@ -10,31 +10,6 @@ import { useGenStore } from '@/lib/gen-store'
 import { playNotificationSound } from '@/lib/sound'
 import { computeFinalDimensions, finalDimsFromMegapixels, framesForDuration, selectResolution, flfNominalDimensions } from '@/lib/comfy/minimax-h3-template'
 
-/** (правка 158) flf: вычисляем номинал из пресета + размеров кадра —
- *  ТОЖЕ формула, что и на сервере (body.targetDimensions в route.ts).
- *  Без этого «Повторить» (restore-from-meta) восстанавливает resolution
- *  из метаданных, но UI-бейдж/разрешение в форме не совпадает с реальным
- *  размером генерации (мета хранит итоговый outW×outH из computeOutputDimensions).
- */
-function flfFinalResolution(p: {
-  mode?: 'ref' | 't2v' | 'flf'
-  firstFrameWidth?: number
-  firstFrameHeight?: number
-  resolution?: string
-  finalResolution?: number
-  freeResolution?: boolean
-}): string | undefined {
-  if (p.mode !== 'flf') return undefined
-  if (!p.firstFrameWidth || !p.firstFrameHeight) return undefined
-  if (!p.resolution) return undefined
-  const match = p.resolution.match(/(\d+)\s*x\s*(\d+)/i)
-  if (!match) return undefined
-  const shortSide = Math.min(parseInt(match[1], 10), parseInt(match[2], 10))
-  if (!shortSide) return undefined
-  const dims = flfNominalDimensions(shortSide, p.firstFrameWidth, p.firstFrameHeight)
-  return `${dims.w}x${dims.h}`
-}
-
 export type { GenPhase }
 
 const POLL_INTERVAL_MS = 1000
@@ -672,9 +647,11 @@ export function useVideoGen() {
         // (правка 155) В flf с пресетом (480p/720p/1080p) targetDimensions = номинал,
         // чтобы 480p и 720p давали разные разрешения (480×854 vs 720×1280 для 9:16).
         const freeMode = (params.finalResolution ?? 0) > 0
-        const targetDimensions = presetDims && !freeMode
-          ? { width: presetDims.w, height: presetDims.h }
-          : undefined
+        const targetDimensions = genMode === 'flf' && params.targetDimensions
+          ? params.targetDimensions
+          : presetDims && !freeMode
+            ? { width: presetDims.w, height: presetDims.h }
+            : undefined
 
         // Actual seed: resolve random (-1) to a concrete value so metadata stores it
         const actualSeed = (params.seed ?? -1) < 0 ? Math.floor(Math.random() * 2 ** 31) : (params.seed ?? -1)
@@ -763,24 +740,14 @@ export function useVideoGen() {
           }
         }
 
-        // (правки 121, 124) ACTUAL финальные размеры — ТО же, что шаблон:
-        // пресет → номинал (computeFinalDimensions), свободное → finalDimsFromMegapixels
-        // (правка 153) В режиме flf — single-pass: lowRes = targetDimensions (ceil32)
-        // или selectResolution(aspect, finalRes).
-        // (правка 155) В flf с пресетом targetDimensions = номинал (480p/720p/1080p).
-        // (правка 156) В flf final = lowRes (ceil32) — апскейлер early-return.
-        const finalDims = genMode === 'flf'
-          ? (() => {
-              const lowRes = targetDimensions
-                ? {
-                    w: Math.max(32, Math.ceil(targetDimensions.width / 32) * 32),
-                    h: Math.max(32, Math.ceil(targetDimensions.height / 32) * 32),
-                  }
-                : selectResolution(aspectRatio, finalResolution)
-              return computeFinalDimensions(lowRes.w, lowRes.h)
-            })()
-          : targetDimensions
-            ? computeFinalDimensions(targetDimensions.width, targetDimensions.height)
+        // Use nominal target pixels for metadata, matching the workflow crop.
+        const finalDims = targetDimensions
+          ? computeFinalDimensions(targetDimensions.width, targetDimensions.height)
+          : genMode === 'flf'
+            ? (() => {
+                const lowRes = selectResolution(aspectRatio, finalResolution)
+                return computeFinalDimensions(lowRes.w, lowRes.h)
+              })()
             : finalDimsFromMegapixels(aspectRatio, finalResolution)
         const { outW, outH } = finalDims
 
@@ -802,9 +769,8 @@ export function useVideoGen() {
             // ориентация из кадра не восстановится и flf снова сломается.
             first_frame_width: params.firstFrameWidth ?? null,
             first_frame_height: params.firstFrameHeight ?? null,
-            // (правка 158) Итоговый номинал flf (WxH из flfNominalDimensions) —
-            // «Повторить» восстанавливает ТОЧНО эти размеры, а не UI-пресет.
-            flf_resolution: flfFinalResolution(params) ?? null,
+            // Repeat uses the actual cropped pixels, including free-resolution outputs.
+            flf_resolution: `${outW}x${outH}`,
           }),
           // Папка вывода этой задачи — для fallback-поиска выходного файла
           // (фильтр по своей подпапке, чтобы не украсть чужой файл)

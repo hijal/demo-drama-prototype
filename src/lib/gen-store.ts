@@ -57,6 +57,8 @@ export interface VideoGenState {
   mode: 'ref' | 't2v' | 'flf'
   /** Resolution label — ТОЧНЫЙ номинал (правка 124): "1280x720", "1920x1080", ... */
   resolution: string
+  /** Exact dimensions restored from an FLF take; cleared when sizing inputs change. */
+  targetDimensions: { width: number; height: number } | null
   /** Total output frames (H3: 17n+5 grid, min 60 ≈ 2.5 с, правка 138). */
   videoLength: number
   /** ref2va reference detail: 'match' | 'max'. */
@@ -104,6 +106,7 @@ export const DEFAULT_VIDEO_STATE: VideoGenState = {
   modelType: 'minimax_h3_ref2va',
   mode: 'ref', // (правка 146)
   resolution: '854x480', // (правка 138) дефолт 480p 16:9 — быстрее и дешевле в VRAM
+  targetDimensions: null,
   videoLength: 60, // (правка 138) минимум 2.5 с (60 кадров при 24 fps, сетка 17n+5)
   referenceDetail: 'match',
   startFrame: null,
@@ -169,13 +172,13 @@ export const useGenStore = create<GenStoreState>()(
       setVideoPrompt: (v) => set((s) => ({ video: { ...s.video, prompt: v } })),
       setVideoSeed: (v) => set((s) => ({ video: { ...s.video, seed: v } })),
       setVideoModel: (v) => set((s) => ({ video: { ...s.video, modelType: v } })),
-      setVideoResolution: (v) => set((s) => ({ video: { ...s.video, resolution: v } })),
+      setVideoResolution: (v) => set((s) => ({ video: { ...s.video, resolution: v, targetDimensions: null } })),
       setVideoLength: (v) => set((s) => ({ video: { ...s.video, videoLength: v } })),
       setVideoReferenceDetail: (v) => set((s) => ({ video: { ...s.video, referenceDetail: v } })),
       setVideoStartFrame: (slot) =>
         set((s) => {
           if (s.video.startFrame && slot !== s.video.startFrame) revokePreview(s.video.startFrame.previewUrl)
-          return { video: { ...s.video, startFrame: slot } }
+          return { video: { ...s.video, startFrame: slot, targetDimensions: null } }
         }),
       setVideoEndFrame: (slot) =>
         set((s) => {
@@ -230,7 +233,16 @@ export const useGenStore = create<GenStoreState>()(
           if (patch.endFrame !== undefined && patch.endFrame !== s.video.endFrame) {
             revokePreview(s.video.endFrame?.previewUrl)
           }
-          return { video: { ...s.video, ...patch } }
+          const sizingChanged =
+            (patch.mode !== undefined && patch.mode !== s.video.mode) ||
+            (patch.resolution !== undefined && patch.resolution !== s.video.resolution) ||
+            (patch.finalResolution !== undefined && patch.finalResolution !== s.video.finalResolution) ||
+            (patch.startFrame !== undefined && patch.startFrame !== s.video.startFrame)
+          return { video: {
+            ...s.video,
+            ...(sizingChanged ? { targetDimensions: null } : {}),
+            ...patch,
+          } }
         }),
     }),
     {

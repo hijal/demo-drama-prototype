@@ -637,6 +637,7 @@ export function GenerateView() {
       prompt,
       seed: v.seed,
       resolution: v.resolution,
+      targetDimensions: v.mode === 'flf' ? v.targetDimensions ?? undefined : undefined,
       videoLength: v.videoLength,
       // (правка 146) «Кадры»: файлы кадров отдельно от референсов;
       // «Текст»/«Кадры»: из референсов уходят только аудио (картинки/видео

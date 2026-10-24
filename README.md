@@ -110,6 +110,7 @@ npm run dev          # dev server (:3000)
 npm run build        # production build (raises the Node heap to 8 GB)
 npm start            # production server (:3000)
 npm run typecheck    # TypeScript check
+npm test             # resolution metadata and repeat-generation regression tests
 ```
 
 The Web UI expects ComfyUI at `COMFY_URL` (default `http://127.0.0.1:8188`) and its folder at `COMFY_ROOT`.
