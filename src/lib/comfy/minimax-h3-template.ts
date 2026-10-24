@@ -931,6 +931,10 @@ export function buildMiniMaxH3Workflow(p: MiniMaxH3Params): Record<string, unkno
         'mode.height': final.genH,
         align: 32,
         enable_chunking: true, // (правка 68) было false — по запросу юзера
+        // Newer node versions renamed enable_chunking and added force_unload;
+        // older versions ignore these extra inputs.
+        enable_temporal_chunking: true,
+        force_unload: true,
         device: 'cuda',
         precision: 'fp16',
         latent: ['46:35', 0],
