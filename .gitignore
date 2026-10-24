@@ -50,3 +50,6 @@ next-env.d.ts
 *.zip
 *.tar.gz
 *.7z
+
+# local secrets (HF token etc.)
+.dev.vars
