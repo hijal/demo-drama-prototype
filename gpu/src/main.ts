@@ -5,6 +5,7 @@ import { uploadArtifact } from "./artifacts";
 import { execute, local, type Job } from "./handlers";
 import { delay, comfy, waitIdle, takeUploadedInputs } from "./comfy";
 import { systemStats } from "./stats";
+import { log, duration, jobLabel, tail } from "./log";
 const root = resolve(process.env.PIPELINE_WORK_DIR || "/content/drama-runtime");
 const studio = (process.env.STUDIO_URL || "").replace(/\/+$/, "");
 const key = process.env.GPU_KEY || "";
@@ -33,7 +34,9 @@ async function main() {
   let lastWork = Date.now(),
     active: { job: Job; abort: AbortController } | null = null,
     beating = false,
-    finalVideoDone = false;
+    finalVideoDone = false,
+    unreachable = false,
+    waiting = 0;
   async function request(path: string, payload: unknown, signal?: AbortSignal) {
     const r = await fetch(studio + path, {
       method: "POST",
@@ -74,6 +77,7 @@ async function main() {
     }
   }
   await heartbeat();
+  log.ok(`Connected to ${url.host} · model ${process.env.COLAB_LLM_MODEL || "Qwen/Qwen3.6-27B"}`);
   const timer = setInterval(() => void heartbeat(), 15000);
   try {
     while (!stop.signal.aborted) {
@@ -84,29 +88,46 @@ async function main() {
         if (stop.signal.aborted) break;
         if ([401, 403].includes((error as any).status)) throw error;
         if (Date.now() - lastWork > idleMinutes * 60000) {
-          console.log(
-            "Studio unreachable past idle timeout; stopping GPU worker",
-          );
+          log.warn("Studio unreachable past the idle timeout; stopping");
           break;
         }
-        console.log("Studio temporarily unreachable; retrying claim");
+        if (!unreachable)
+          log.warn("Studio unreachable; retrying every 5 seconds");
+        unreachable = true;
         await delay(5000, stop.signal);
         continue;
       }
+      if (unreachable) log.ok("Studio reachable again");
+      unreachable = false;
       if (!job) {
         // Owner request: release the paid runtime as soon as the final video is done.
         if (finalVideoDone) {
-          console.log("Final video assembled and queue empty; stopping GPU worker");
+          log.ok("Final video assembled and the queue is empty; stopping");
           break;
         }
-        if (Date.now() - lastWork > idleMinutes * 60000) {
-          console.log("GPU worker idle timeout reached");
+        const idle = Date.now() - lastWork;
+        if (idle > idleMinutes * 60000) {
+          log.info(`No jobs for ${idleMinutes} minutes; stopping`);
           break;
+        }
+        // Say once that we are waiting, then remind every 5 minutes with the time left.
+        const left = Math.ceil(idleMinutes - idle / 60000);
+        if (!waiting || Date.now() - waiting > 300000) {
+          log.info(
+            `Waiting for jobs from the studio · shuts down after ${left} more idle minute${left === 1 ? "" : "s"}`,
+          );
+          waiting = Date.now();
         }
         await delay(3000, stop.signal);
         continue;
       }
+      waiting = 0;
       lastWork = Date.now();
+      const tag = job.type === "fix_script" ? "script" : job.type,
+        started = Date.now();
+      let lastStage = "",
+        lastPrinted = 0;
+      log.step(jobLabel(job), tag);
       const abort = new AbortController();
       const signal = AbortSignal.any([
         stop.signal,
@@ -121,6 +142,12 @@ async function main() {
       await mkdir(folder, { recursive: true });
       const progress = async (pct: number, stage: string) => {
         signal.throwIfAborted();
+        // Render polling repeats the same stage every 15 s; print it at most once a minute.
+        if (stage !== lastStage || Date.now() - lastPrinted > 60000) {
+          log.detail(`${stage} · ${Math.round(pct)}% · ${duration(Date.now() - started)}`);
+          lastStage = stage;
+          lastPrinted = Date.now();
+        }
         await request(
           `/api/gpu/jobs/${job.id}/progress`,
           { claim_token: job.claim_token, pct, stage },
@@ -161,15 +188,22 @@ async function main() {
           { claim_token: job.claim_token, result },
           signal,
         );
-        console.log(`Completed ${job.type}`);
+        log.ok(`${jobLabel(job)} done in ${duration(Date.now() - started)}`, tag);
         if (job.type === "assemble") finalVideoDone = true;
       } catch (error) {
+        const reason = error instanceof Error ? error.message : "GPU task failed";
         if (!signal.aborted)
           await request(`/api/gpu/jobs/${job.id}/fail`, {
             claim_token: job.claim_token,
-            error: error instanceof Error ? error.message : "GPU task failed",
+            error: reason,
           }).catch(() => {});
-        console.error(`GPU task ${job.type} failed; review project logs`);
+        if (signal.aborted && !stop.signal.aborted)
+          log.warn(`${jobLabel(job)} cancelled or claim expired`, tag);
+        else {
+          log.error(`${jobLabel(job)} failed after ${duration(Date.now() - started)}`, tag);
+          log.detail(reason);
+          await serviceLogs();
+        }
       } finally {
         active = null;
         await local("/release", {}).catch(() => {});
@@ -193,7 +227,27 @@ async function main() {
     await local("/release", {}).catch(() => {});
   }
 }
+/** On a failure, show why ComfyUI or the model server broke without opening /tmp files. */
+async function serviceLogs() {
+  for (const [name, path] of [
+    ["ComfyUI", process.env.COMFY_LOG_FILE],
+    ["Model server", process.env.MODEL_LOG_FILE],
+  ] as const) {
+    const lines = (await tail(path, 400)).filter((line) =>
+      /error|exception|traceback|out of memory|killed|failed/i.test(line),
+    );
+    if (!lines.length) continue;
+    log.detail(`${name} log (${path}), last errors:`);
+    for (const line of lines.slice(-12)) log.detail(`  ${line.slice(0, 200)}`);
+  }
+}
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "GPU worker stopped");
+  log.error(
+    [401, 403].includes((error as any)?.status)
+      ? "The studio rejected GPU_KEY; check the Colab secret and the /api/gpu/* Access bypass"
+      : error instanceof Error
+        ? error.message
+        : "GPU worker stopped",
+  );
   process.exitCode = 1;
 });

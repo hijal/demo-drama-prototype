@@ -1,6 +1,7 @@
 """Rebuild the pipeline launcher while retaining the proven H3 install cells."""
 import copy
 import json
+import re
 from pathlib import Path
 root=Path(__file__).resolve().parents[2]
 notebook=copy.deepcopy(json.loads((root/'MiniMax_Studio_Colab.ipynb').read_text()))
@@ -9,4 +10,8 @@ for cell in notebook['cells']:
  cell['source']=[line.replace('BRANCH = "main"','BRANCH = "drama-pipeline"') for line in cell.get('source',[])]
  if cell.get('cell_type')=='code':cell['execution_count']=None;cell['outputs']=[]
 notebook['cells'][7]['source']=(root/'gpu/python/colab_launch.py').read_text().splitlines(keepends=True)
+# The pipeline keeps media in R2, so the studio's Google Drive cell only adds a permission prompt to Run all.
+del notebook['cells'][2]
+for number,cell in enumerate(notebook['cells'][1:],1):
+ cell['source']=[re.sub(r'^#@title \d+\.','#@title %d.'%number,line) for line in cell['source']]
 (root/'Drama_Pipeline_Colab.ipynb').write_text(json.dumps(notebook,indent=1,ensure_ascii=False)+'\n')
