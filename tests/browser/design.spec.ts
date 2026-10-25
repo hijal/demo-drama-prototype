@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { mockBackend } from "./helpers/mock-backend";
+
+const tmpDir = fs.existsSync("/private/tmp") ? "/private/tmp" : "/tmp";
 test("original shell, theme and generation panel geometry survive the framework conversion", async ({
   page,
 }) => {
@@ -21,7 +25,7 @@ test("original shell, theme and generation panel geometry survive the framework 
   expect((await parameters.boundingBox())?.width).toBe(400);
   expect((await prompt.boundingBox())!.x).toBeGreaterThanOrEqual(660);
   await expect(sidebar.locator(".gradient-creative")).toBeVisible();
-  await page.screenshot({ path: "/private/tmp/svelte-restored-generate.png" });
+  await page.screenshot({ path: path.join(tmpDir, "svelte-restored-generate.png") });
   await page.getByRole("button", { name: "Gallery", exact: true }).click();
   expect(
     (
@@ -30,7 +34,7 @@ test("original shell, theme and generation panel geometry survive the framework 
         .boundingBox()
     )?.width,
   ).toBe(224);
-  await page.screenshot({ path: "/private/tmp/svelte-restored-gallery.png" });
+  await page.screenshot({ path: path.join(tmpDir, "svelte-restored-gallery.png") });
   await page.getByRole("button", { name: "Generate", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
@@ -38,7 +42,7 @@ test("original shell, theme and generation panel geometry survive the framework 
   const bounds = await dialog.boundingBox();
   expect(bounds?.width).toBe(950);
   expect(bounds?.height).toBe(920);
-  await page.screenshot({ path: "/private/tmp/svelte-restored-settings.png" });
+  await page.screenshot({ path: path.join(tmpDir, "svelte-restored-settings.png") });
   await page.getByRole("tab", { name: "Appearance", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Gray", exact: true }),

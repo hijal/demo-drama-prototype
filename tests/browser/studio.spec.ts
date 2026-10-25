@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { mockBackend } from "./helpers/mock-backend";
+
+const tmpDir = fs.existsSync("/private/tmp") ? "/private/tmp" : "/tmp";
 
 test("Svelte navigation preserves and reloads generation parameters", async ({
   page,
@@ -36,7 +40,7 @@ test("Svelte navigation preserves and reloads generation parameters", async ({
   );
   expect(errors).toEqual([]);
   await page.screenshot({
-    path: "/private/tmp/svelte-studio-desktop.png",
+    path: path.join(tmpDir, "svelte-studio-desktop.png"),
     fullPage: true,
   });
 });
@@ -151,7 +155,7 @@ test("mobile Generate and Gallery fit the viewport", async ({ page }) => {
     page.getByRole("heading", { name: "Parameters", exact: true }),
   ).toBeVisible();
   await page.screenshot({
-    path: "/private/tmp/svelte-studio-mobile.png",
+    path: path.join(tmpDir, "svelte-studio-mobile.png"),
     fullPage: true,
   });
   expect(
