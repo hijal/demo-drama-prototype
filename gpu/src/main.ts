@@ -31,7 +31,8 @@ async function main() {
   process.on("SIGTERM", () => stop.abort());
   let lastWork = Date.now(),
     active: { job: Job; abort: AbortController } | null = null,
-    beating = false;
+    beating = false,
+    finalVideoDone = false;
   async function request(path: string, payload: unknown, signal?: AbortSignal) {
     const r = await fetch(studio + path, {
       method: "POST",
@@ -91,6 +92,11 @@ async function main() {
         continue;
       }
       if (!job) {
+        // Owner request: release the paid runtime as soon as the final video is done.
+        if (finalVideoDone) {
+          console.log("Final video assembled and queue empty; stopping GPU worker");
+          break;
+        }
         if (Date.now() - lastWork > idleMinutes * 60000) {
           console.log("GPU worker idle timeout reached");
           break;
@@ -154,6 +160,7 @@ async function main() {
           signal,
         );
         console.log(`Completed ${job.type}`);
+        if (job.type === "assemble") finalVideoDone = true;
       } catch (error) {
         if (!signal.aborted)
           await request(`/api/gpu/jobs/${job.id}/fail`, {
