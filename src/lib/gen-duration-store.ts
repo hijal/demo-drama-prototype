@@ -3,7 +3,7 @@
  * Each entry records the completion timestamp and the elapsed time.
  * The gallery matches the N-th newest file to the N-th newest entry.
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 
 export interface GenDurationEntry {

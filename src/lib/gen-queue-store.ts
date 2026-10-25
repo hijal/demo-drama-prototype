@@ -12,7 +12,7 @@
  * On rehydrate, finished items and anything older than MAX_AGE_MS are
  * dropped (their auto-remove timers don't survive the reload).
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 
 /* ──────────────────── Types ──────────────────── */

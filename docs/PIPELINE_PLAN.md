@@ -15,9 +15,9 @@ You are continuing a project that turns a **written drama script** into a **fini
 
 1. upload a script → 2. approve the auto-fixed script → 3. approve auto-generated character/location reference sheets (edit only what they ask) → 4. clips render automatically, auto-QA'd, bad ones regenerated → 5. owner re-rolls any clip they dislike → 6. one click assembles the final 1080p video.
 
-Target architecture: **Cloudflare Worker** (UI + API, behind **Cloudflare Access**) + **D1** (state) + **R2** (media) + **Durable Object** (real-time logs) + **Colab GPU worker** (ComfyUI: MiniMax H3 + FLUX.2 Klein 9B) + **Hugging Face router LLMs** (script fixing, prompt writing, vision QA).
+Target architecture: **Cloudflare Worker** (UI + API, behind **Cloudflare Access**) + **D1** (state) + **R2** (media) + **Durable Object** (real-time logs) + **Colab GPU worker** (ComfyUI: MiniMax H3 + FLUX.2 Klein 9B) + **local Colab LLM** (script fixing, prompt writing, vision QA; no paid inference APIs).
 
-Nothing of the new architecture is built yet. Phase 1 has not started (only `.dev.vars` was added to `.gitignore`). Start at **Phase 1**.
+Phase 1 implementation is in progress: the script parser, serializer, validator, Colab-local fixer, review CLI and tests now exist in `worker/`. Live model comparison and owner review are still required before marking Phase 1 DONE. Continue from the Phase 1 checklist below.
 
 ---
 
@@ -31,23 +31,24 @@ Nothing of the new architecture is built yet. Phase 1 has not started (only `.de
 ## 2. Hard rules (do not break)
 
 1. **Git commits:** plain one-line message, **no `Co-Authored-By` or any attribution trailer**. Push only when the owner asks or when Colab must pull new code (the Colab notebook clones `main` from GitHub).
-2. **Secrets:** never ask the owner to paste tokens in chat. Local: `/Users/fe_dev_003/Downloads/test-drama/.dev.vars` (gitignored) with `HF_TOKEN=...`. Production: `wrangler secret put HF_TOKEN`. Never commit secrets. The repo is **public**.
+2. **Secrets:** never ask the owner to paste tokens in chat. Local: `/Users/fe_dev_003/Downloads/test-drama/.dev.vars` (gitignored) with `HF_TOKEN=...`. HF token is for model downloads only; inference runs locally in Colab, never through a paid HF provider. Do not copy the download token into Cloudflare. Never commit secrets. The repo is **public**.
 3. **Do not commit the owner's scripts** (they live in `~/Downloads`, see §11) unless the owner says so — the repo is public.
 4. **Colab runtime costs money.** Always tell the owner when a step starts burning compute units, and offer to "Disconnect and delete runtime" when done. The notebook auto-deletes the runtime after `IDLE_MINUTES` (default 20) without generation.
 5. **Verify before claiming.** Run typecheck/build, test in a browser or with curl, and say plainly what was and was not tested.
-6. Next.js in this repo is **v16** with breaking changes — read `node_modules/next/dist/docs/` before touching Next APIs (see `AGENTS.md`). The new Worker UI (Phase 2) does not need Next.js.
+6. Next.js in this repo is **v16** with breaking changes — read `node_modules/next/dist/docs/` before touching Next APIs (see `AGENTS.md`). The browser frontend is Svelte; existing Next.js API handlers remain until the Worker backend is ready.
+7. **Owner update (2026-10-25): the entire frontend must use Svelte**, following https://svelte.dev/llms-full.txt. This includes the existing Generate, Gallery and Settings screens as well as every new pipeline screen. For `web/`, use Svelte 5 + Vite, typed `.svelte` components, runes (`$state`, `$derived`, `$props`) and current event handlers (`onclick`). Port styling/design rather than importing React/Radix components. The existing frontend has now been converted to Svelte in `web/`; Next.js remains only as the existing API runtime behind `server.js`. Verify feature behavior before claiming GPU integration complete. Reuse framework-independent ComfyUI logic. Phase 1 stays framework-independent TypeScript.
 
 ---
 
 ## 3. Current state of the repo (what exists today)
 
-A Next.js 16 web UI ("MiniMax H3 Studio") stripped down to **video generation only** (commit `3630f09`). It is the *current* manual tool; the new pipeline will replace its UI but **reuse its ComfyUI workflow code**.
+The manual MiniMax H3 Studio frontend is now **Svelte 5 + Vite** in `web/` (Generate, Gallery, Settings, queue, prompt editor/history and uploads). The former React UI and hooks have been removed. Existing Next.js 16 **API routes only** remain in `src/app/api`; `server.js` serves Svelte plus these APIs on port 3000. The pipeline will extend this Svelte UI and reuse framework-independent ComfyUI logic.
 
 ```
 MiniMax_Studio_Colab.ipynb   7 cells: GPU check → Drive mount → apt/Node/cloudflared → ComfyUI+nodes
                              → Web UI clone+npm install+production build → model download (aria2c)
                              → launch ComfyUI + `node server.js` + Cloudflare quick tunnel + idle auto-shutdown
-server.js                    Next.js production server (PORT, BIND_HOST env)
+server.js                    Svelte frontend + Next.js API server (PORT, BIND_HOST env; --dev enables Vite HMR)
 scripts/build.mjs            `next build --webpack` with 8 GB Node heap
 src/app/page.tsx             2 tabs: Generate, Gallery
 src/app/api/comfy/*          generate, upload, files, file, meta, progress, health, clean, free, …
@@ -62,7 +63,7 @@ docs/Minimax_Studio_Workflow.json      workflow for plain ComfyUI (may still use
 ```
 
 **Key type** `MiniMaxH3Params` (in `minimax-h3-template.ts`): `prompt`, `mode: 'ref'|'t2v'|'flf'`, `refImages[]` (ComfyUI input filenames, max 9), `refVideos[]` (max 3), `refAudios[]` (max 3), `firstFrame`/`lastFrame` (flf), `aspectRatio` ("16:9"/"9:16"), `duration` (s), `seed` (-1 random), `targetDimensions {width,height}` (use 1920×1080 or 1080×1920), `lowResMP`, `firstSamplerSteps`, `sigmaVariant`, samplers, `turboLora*`, `lowVramAttention`, `chunkFeedForward`, `outputSubfolder`, `refImageSize: 'match'|'max'`.
-**Reuse plan:** the Colab GPU worker (Phase 3) is written in **Node/TypeScript** and imports `buildMiniMaxH3Workflow` + `submitVideo` directly (Node 20 is already installed on Colab by notebook Step 3).
+**Reuse plan:** the Colab GPU worker (Phase 3) is written in **Node/TypeScript** and imports `buildMiniMaxH3Workflow` + `submitVideo` directly (the notebook now installs Node 24 for the Svelte workspace and pipeline tools).
 
 ### Models on Colab (notebook Step 6, all ready-verified 2026-10-24)
 | File | Folder | Size |
@@ -84,9 +85,9 @@ Custom nodes installed by Step 4: ComfyUI-MiniMax-H3-SPEED, ComfyUI-PT_H3ConcatA
 - Models stay in VRAM between jobs (`--highvram`; the old "unload after queue drain" code was removed).
 
 ### Time & cost estimates for the new pipeline (estimates — 1080p not yet measured)
-- 10 s clip: ~80 s at 720p (measured) → **~3 min at 1080p** (≈2.25× pixels). Auto-QA runs on HF (not GPU) in parallel → ~0 GPU time. Auto-retakes add ~20–30 % (4 of 11 takes needed a redo in the session). Chaining adds ~10 % per chained clip. Character sheets ~1–2 min each, once per project.
-- 40 s / 7-scene film at 1080p: **~25–30 min** machine time, owner hands-on ~5 min.
-- One jungle episode (9 × 10 s): **~30–35 min**. Whole 20-episode series: **~10–11 GPU hours ≈ 90–100 CU** — more than the ~74 CU the owner has. Told the owner (2026-10-25); options: render episode by episode over time, render series at 720p, or approve at 720p then upscale finals. Measure real 1080p timing in Phase 3 and update these numbers.
+- 10 s clip: ~80 s at 720p (measured) → **~3 min at 1080p** (≈2.25× pixels). Auto-QA now runs on the same Colab GPU and adds inference plus model-switching time; the previous zero-GPU QA assumption is withdrawn. Auto-retakes add ~20–30 % (4 of 11 takes needed a redo in the session). Chaining adds ~10 % per chained clip. Character sheets ~1–2 min each, once per project.
+- 40 s / 7-scene film at 1080p: **~25–30 min before local LLM/QA overhead** machine time, owner hands-on ~5 min.
+- One jungle episode (9 × 10 s): **~30–35 min before local LLM/QA overhead**. Whole 20-episode series: **~10–11 GPU hours ≈ 90–100 CU** — more than the ~74 CU the owner has. Told the owner (2026-10-25); options: render episode by episode over time, render series at 720p, or approve at 720p then upscale finals. These are historical video-only estimates, not revised end-to-end budgets. Measure local LLM/QA, switching overhead and real 1080p timing in Phase 3 before quoting a new CU total.
 
 ---
 
@@ -101,15 +102,19 @@ Custom nodes installed by Step 4: ComfyUI-MiniMax-H3-SPEED, ComfyUI-PT_H3ConcatA
 | Real-time logs | **Durable Object** + WebSocket | GPU worker posts lines; browser shows them live |
 | GPU | Colab G4, owner presses "Run all" | Colab has no start API. Serverless GPUs (Modal/RunPod) = later option, separate billing |
 | Character images | **FLUX.2 Klein 9B** (owner has HF access) | Edit only what the owner asks; full re-create on request |
-| LLM | Hugging Face router (`https://router.huggingface.co/v1`, OpenAI-compatible) with owner's HF token | Owner chose HF. Candidates below — **pick by test in Phase 1** |
+| LLM | Local open-weight model in Colab; OpenAI-compatible loopback server | Owner chose **Colab only**, no paid inference API. Quality candidate Qwen3.6-27B, smaller fallback Qwen3.5-9B; test before choosing a winner |
 | Resolution | 1080p | Owner request |
 | Build vs adopt | **Own lean pipeline**; borrow only needed parts from GitHub | No existing platform fits Worker + H3 Ref2VA + our format (see §9) |
 | Episodes | **Optional.** No EPISODE block ⇒ whole script = one film | Owner has both short films and 20-episode series |
 
-**LLM candidates (available on HF router 2026-10-25, verify again):**
-- Script fixing / prompt writing: `deepseek-ai/DeepSeek-V4-Pro` (1M ctx) — alt `zai-org/GLM-5.3` (1M ctx, 5 providers).
-- Vision QA: `Qwen/Qwen3-VL-235B-A22B-Instruct` — alt `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`.
-- List models: `curl -s https://router.huggingface.co/v1/models` (public). Call with `Authorization: Bearer $HF_TOKEN`, OpenAI chat-completions body.
+**Owner update: Colab-only inference (2026-10-25).** Paid HF Router comparison is cancelled. No private script was sent and no paid inference ran. Model downloads may still use Hugging Face; this is separate from HF-hosted inference.
+
+- First quality candidate: `Qwen/Qwen3.6-27B`, test 4-bit loading on the actual GPU.
+- Smaller fallback: `Qwen/Qwen3.5-9B`, also supports text and images.
+- Both are Apache-2.0 image/text models. These are researched candidates, **not measured winners**. See [Colab LLM evaluation](COLAB_LLM.md) for sources, VRAM assumptions and acceptance checks.
+- Run fixing/prompt writing before rendering; release the LLM before H3/Klein. For frame QA, release rendering models before loading the LLM. One GPU lock covers every model and exception/retry path. Batch QA where possible and measure the switching penalty.
+- Keep an isolated LLM environment; do not change the working ComfyUI Python environment to try a new inference engine. The H3 text encoder is not assumed to be a general chat/vision judge.
+- Worker queues LLM jobs for Colab; it never invokes a paid inference provider. GPU offline means script fixing/QA waits for Colab. Owner review remains available offline.
 
 ### The 5 owner-approved extras (must be built)
 1. **Auto QA** — vision LLM checks frames of every clip (cast present, faces in frame, matches KEYFRAME); auto-regenerate up to 2×; only surface failures.
@@ -128,8 +133,8 @@ Later/optional: idea → full script generator; email/Telegram notifications; se
                  Owner (browser, Cloudflare Access login)
                                 │
                 ┌───────────────▼────────────────┐
-                │ Cloudflare Worker  (studio)     │  static SPA (React+Vite) + JSON API
-                │  • /api/projects …              │──── HF router (LLM: fix script, write prompts, QA)
+                │ Cloudflare Worker  (studio)     │  static SPA (Svelte 5 + Vite) + JSON API
+                │  • /api/projects …              │     queues LLM jobs for Colab
                 │  • /api/gpu/* (worker protocol) │
                 │  • LogHub Durable Object (WS)   │
                 └──────┬───────────────┬──────────┘
@@ -138,7 +143,7 @@ Later/optional: idea → full script generator; email/Telegram notifications; se
                 ┌──────▼───────────────▼──────────┐
                 │ Colab GPU worker (Node/TS)       │  polls /api/gpu/jobs, runs ComfyUI,
                 │  ComfyUI: H3 + Klein 9B + nodes  │  uploads results to R2, streams logs,
-                │  ffmpeg (QA frames, assembly)    │  heartbeats, exits when idle
+                │  local LLM + ffmpeg              │  heartbeats, exits when idle
                 └──────────────────────────────────┘
 ```
 
@@ -147,11 +152,11 @@ Later/optional: idea → full script generator; email/Telegram notifications; se
 worker/                 Cloudflare Worker (wrangler) — API + Durable Object + D1 migrations
   src/index.ts          router (Hono recommended)
   src/do/loghub.ts      Durable Object: WS fan-out + ring buffer of last ~500 lines/project
-  src/llm/              HF router client, prompts (fixer, prompt-writer, QA)
+  src/llm/              Colab-local client, prompts (fixer, prompt-writer, QA)
   src/script/           parser, validator, serializer  (pure TS, unit-tested)
   migrations/0001_init.sql
   wrangler.jsonc
-web/                    React + Vite SPA served by Worker static assets (reuse shadcn components from src/components/ui)
+web/                    Svelte 5 + Vite SPA served by Worker static assets (port the existing design; React components cannot be reused directly)
 gpu/                    Colab GPU worker (Node/TS) — imports ../src/lib/comfy/* builders
   src/main.ts           job loop
   workflows/            ComfyUI API JSON for Klein, OrbitSheets, chaining
@@ -159,7 +164,7 @@ docs/SCRIPT_FORMAT.md   owner-facing format spec (extract from §6)
 docs/templates/         short_film_template.txt, series_template.txt
 MiniMax_Studio_Colab.ipynb  → becomes "Start GPU worker" (same Steps 1–6 + Klein/nodes, Step 7 runs gpu worker)
 ```
-The old Next.js app (`src/`) stays until Phase 6 is done; its ComfyUI builders are imported by `gpu/`.
+The Svelte conversion is implemented in `web/`. Shared ComfyUI builders remain in `src/lib/comfy/`; they are framework-independent. `src/app/api` retains the existing Next.js backend until the Cloudflare migration. `src/components` and `src/hooks` React UI files are removed. `src/lib/video-generation.ts` owns polling/rehydration and is created once by the Svelte app, so navigating between tabs does not stop tracking.
 
 ### 5.2 D1 schema (initial)
 ```sql
@@ -346,20 +351,22 @@ H3 audio is **32 kHz** — when mixing in a music track, resample explicitly (`a
 
 ## 8. Phases (build in order; each has a definition of done)
 
-### Phase 1 — Script format, parser, validator, LLM fixer  (status: NOT STARTED)
+### Phase 1 — Script format, parser, validator, LLM fixer  (status: IN PROGRESS)
 1. Write `docs/SCRIPT_FORMAT.md` (owner-readable, from §6) + `docs/templates/short_film_template.txt` + `series_template.txt`.
 2. `worker/src/script/parse.ts` → AST `{header, characters[], props[], locations[], rules[], episodes[{number,title,scenes[{…, shots[], lines[], sfx[]}]}]}` (no EPISODE ⇒ one implicit episode with `number: 0`). `serialize.ts` AST → canonical text. `validate.ts` → issues (§6.1).
 3. Unit tests (vitest) using the three real scripts (§11): chicken & burrito parse with 0 errors; jungle parses with expected E05/W04 errors.
-4. `worker/src/llm/hf.ts` (chat completions via HF router, retry/backoff, model id from env) + `fixer.ts` (§6.2).
+4. `worker/src/llm/colab.ts` (loopback-only chat completions, retry/backoff, model id from env) + `fixer.ts` (§6.2).
 5. CLI for testing without the Worker: `npx tsx worker/scripts/fix.ts <file>` → writes `<file>.fixed.txt` + report.
-6. **Model bake-off:** run fixer on jungle Episode 01 with DeepSeek-V4-Pro and GLM-5.3; compare validity (0 errors), faithfulness (no story changes), and quality of invented character descriptions. Record the winner in §4.
+6. **Model bake-off:** run fixer on jungle Episode 01 locally in Colab with Qwen3.6-27B and Qwen3.5-9B, one loaded at a time; compare validity (0 errors), faithfulness (no story changes), and quality of invented character descriptions. Record the winner in §4.
 **Done when:** all 3 scripts end with 0 validation errors after fixing; owner reads the jungle Episode 01 result and agrees.
 
-### Phase 2 — Cloudflare backend + UI shell  (status: NOT STARTED)
-1. `wrangler` project in `worker/`; bindings: D1 `DB`, R2 `MEDIA`, DO `LOGHUB`, secrets `HF_TOKEN`, `GPU_KEY`. Static assets from `web/dist`.
-2. D1 migration (§5.2), API: projects CRUD, script upload → fix (async job, LLM runs in Worker), approve, assets list, scenes list, jobs, presigned R2 URLs.
+**Implementation update (2026-10-25):** `docs/SCRIPT_FORMAT.md`, both synthetic templates, `worker/src/script/*`, `worker/src/llm/{colab,fixer}.ts`, CLI `worker/scripts/fix.ts`, and model-comparison CLI `worker/scripts/bakeoff.ts` exist. Run `npm --prefix worker ci` (Node 22.12+; Node 24 recommended), `npm run test:pipeline`, `npm run typecheck:pipeline`. Private script files are read in place, never copied into the repo. `--dry-run` makes canonical text + a report without inference. For series, live repair requires `--episode N`; carry the approved shared cast descriptions between episodes. E11 flags unsupported syntax and E12 rejects changed dialogue/scene/episode structure. Successful validation always still requires owner approval. Local-only adapter refuses remote endpoints and redirects; HF_TOKEN is not used for inference. CLI runs inside Colab next to the local model server. Use separate fix runs when switching models; compare accepts only already-loaded local models. No winner chosen and no inference calls made yet. Model serving/GPU integration is still pending; see COLAB_LLM.md.
+
+### Phase 2 — Cloudflare backend + UI shell  (status: IN PROGRESS — existing frontend migrated; Cloudflare backend pending)
+1. `wrangler` project in `worker/`; bindings: D1 `DB`, R2 `MEDIA`, DO `LOGHUB`, secret `GPU_KEY`. Static assets from `web/dist`.
+2. D1 migration (§5.2), API: projects CRUD, script upload → fix (async job, LLM runs in Colab), approve, assets list, scenes list, jobs, presigned R2 URLs.
 3. LogHub DO: `POST /log` appends + broadcasts; `GET /ws?project=` WebSocket; keep last 500 lines.
-4. `web/`: React+Vite+Tailwind, screens §5.5 (start with Projects, Script review, Logs drawer).
+4. `web/`: Svelte 5 + Vite with the existing CSS theme in `web/src/style.css` for the entire frontend, screens §5.5 (start with Projects, Script review, Logs drawer). The existing Generate, Gallery and Settings frontend has already been ported to `web/`; extend it with pipeline screens. Browser tests cover navigation/persistence, multiple submissions/cancellation, exact FLF Repeat, settings, deletion confirmation and mobile layout. Real GPU generation still needs verification.
 5. Cloudflare Access application on the Worker hostname (owner's email only). Verify `Cf-Access-Jwt-Assertion` in the Worker for `/api/*` except `/api/gpu/*` (GPU key instead).
 6. Deploy (`wrangler deploy`); owner logs in from Mac.
 **Done when:** owner uploads a script on the live URL, sees fixed script + change list, approves it; logs stream live.
@@ -373,7 +380,7 @@ Note: the owner's Cloudflare login for wrangler is needed (`npx wrangler login`,
 
 ### Phase 4 — Character / location reference sheets  (status: NOT STARTED)
 1. Klein 9B portrait from the character spec (text → image), white/neutral background, full body + face. Edit: Klein image-edit with the owner's instruction on the previous version (keeps identity). Recreate: new seed.
-2. Turnaround + voice: **ComfyUI-OrbitSheets** (MIT) "Character Turnaround Prompt (H3)" + "Frame Select" (+ VLM judge via HF endpoint) → 5 views + contact sheet + **voice sample**. Alternative for stills-only sheet: `muse-character-sheet-klein` (needs ComfyUI-RMBG; Klein 9B ≈ 29 GB VRAM).
+2. Turnaround + voice: **ComfyUI-OrbitSheets** (MIT) "Character Turnaround Prompt (H3)" + "Frame Select" (+ local Colab VLM judge) → 5 views + contact sheet + **voice sample**. Alternative for stills-only sheet: `muse-character-sheet-klein` (needs ComfyUI-RMBG; Klein 9B ≈ 29 GB VRAM).
 3. Locations: Klein anchor still → OrbitSheets location sheet (front/right/rear/left).
 4. Props: Klein still (+ VARIANT stills).
 5. UI Cast screen with approve/change/recreate + voice player.
@@ -399,7 +406,7 @@ Note: the owner's Cloudflare login for wrangler is needed (`npx wrangler login`,
 **Done when:** jungle Episode 01 (90 s) final video plays in the UI and on the owner's Mac.
 
 ### Afterwards
-Notifications (email/Telegram), idea→script generator, serverless GPU option, retire the old Next.js UI (`src/`).
+Notifications (email/Telegram), idea→script generator, serverless GPU option. The old React frontend has been removed; existing Next.js API handlers are replaced as part of the Cloudflare backend migration.
 
 ---
 
@@ -426,7 +433,7 @@ Also: ComfyUI has `MiniMaxH3AddGuide` (anchor an image at any frame) — the cur
 4. **Latent upscaler node** (current version) requires `enable_temporal_chunking` and `force_unload` inputs (old name `enable_chunking` kept too) — fixed in `minimax-h3-template.ts`. `docs/Minimax_Studio_Workflow.json` was **not** updated.
 5. **Colab notebook kernelspec** must be set (`metadata.kernelspec.name = python3`) or "Runtime type" is blank.
 6. **Drive-mounted output folder is slow to read** through the tunnel (~10 KB/s–1 MB/s). Do frame extraction/assembly on Colab; serve media from R2 in the new design.
-7. Typing long prompts into the UI via automation drops characters → set textarea values programmatically (React native value setter + `input` event).
+7. Typing long prompts into the UI via automation drops characters → use Playwright `locator.fill()` for Svelte textareas; avoid character-by-character automation for long prompts.
 8. G4 is detected as "RTX PRO 6000 Blackwell" → flags `--reserve-vram 3 --highvram`; L4 must NOT use `--highvram`.
 9. H3 audio is 32 kHz (see §7.5).
 10. Fixed after an external review (2026-10-25, branch `drama-pipeline`): gallery folder names `.`/`..` escaped `output/` (sanitizer now rejects dot-names, `folderPath` checks containment, generate route uses the same sanitizer); model downloads accepted files ≥90 % complete (root cause: `sizeBytes` used GiB for decimal GB) → exact byte sizes + exact Content-Length check; `doDownload` swallowed errors so retries never ran → errors now propagate, retry+Range resume verified with a local test server; "Repeat generation" kept old refs/frames → restore now replaces them; Frames mode output 1920×1088 → now cropped to 1920×1080 like other modes; exported workflow JSON got the new upscaler inputs.
@@ -453,8 +460,8 @@ If the next AI cannot read `~/Downloads`, ask the owner to attach the files.
 | Phase | Status | Date | Notes |
 |---|---|---|---|
 | 0 Research & plan | DONE | 2026-10-25 | This document |
-| 1 Script format/parser/validator/fixer | NOT STARTED | | `.dev.vars` already gitignored; owner must create it with HF_TOKEN |
-| 2 Cloudflare backend + UI | NOT STARTED | | needs `wrangler login` by owner |
+| 1 Script format/parser/validator/fixer | IN PROGRESS | 2026-10-25 | Core code, docs/templates, private-input and mocked local-client tests implemented. Owner chose Colab-only; no paid provider calls. Local model serving, GPU evaluation and owner approval pending. Download token stays ignored. |
+| 2 Cloudflare backend + UI | IN PROGRESS | 2026-10-25 | Existing frontend converted to Svelte 5 + Vite; 10 browser tests cover core flows. Cloudflare backend/deployment and pipeline screens pending; needs owner wrangler login. |
 | 3 Colab GPU worker | NOT STARTED | | |
 | 4 Reference sheets | NOT STARTED | | |
 | 5 Prompts/QA/regenerate/voice/chaining | NOT STARTED | | |

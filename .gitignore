@@ -1,5 +1,5 @@
 # dependencies
-/node_modules
+node_modules
 
 # next.js
 /.next/
@@ -53,3 +53,13 @@ next-env.d.ts
 
 # local secrets (HF token etc.)
 .dev.vars
+
+# Private script repair outputs and model comparison reports
+.pipeline-review/
+*.fixed.txt
+*.report.json
+
+# Svelte builds and browser test output
+/web/dist/
+/test-results/
+/playwright-report/

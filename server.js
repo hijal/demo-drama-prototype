@@ -1,60 +1,142 @@
 #!/usr/bin/env node
-/**
- * MiniMax H3 Studio
- * Server entry point for Next.js 16.
- */
-process.env.NODE_ENV = 'production'
+/** Svelte frontend + existing ComfyUI API, on one port for local use and Colab. */
+const http = require('node:http')
+const fs = require('node:fs')
+const path = require('node:path')
+const { pipeline } = require('node:stream')
+const dev = process.argv.includes('--dev')
+process.env.NODE_ENV = dev ? 'development' : 'production'
 process.env.NEXT_TELEMETRY_DISABLED = '1'
-
-const http = require('http')
-const next = require('next')
-
-const dir = __dirname
-// Default to loopback: binding 0.0.0.0 triggers a Windows Firewall prompt on
-// fresh machines. Set BIND_HOST=0.0.0.0 to expose the UI on the LAN.
 const hostname = process.env.BIND_HOST || '127.0.0.1'
-const port = parseInt(process.env.PORT || '3000', 10)
-
-// Handle uncaught exceptions gracefully (e.g. "Controller is already closed")
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err.message)
-  console.error('Stack:', err.stack)
-  // Don't exit — let the server keep running
-})
-
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Rejection:', reason)
-})
-
+const port = Number(process.env.PORT || 3000)
+const dist = path.join(__dirname, 'web', 'dist')
+const mime = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.json': 'application/json',
+}
+function serveFrontend(req, res) {
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    res.writeHead(405, { Allow: 'GET, HEAD' })
+    res.end()
+    return
+  }
+  let pathname
+  try {
+    pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname)
+  } catch {
+    res.writeHead(400)
+    res.end()
+    return
+  }
+  if (
+    pathname.includes('\0') ||
+    pathname.split('/').some((segment) => segment.startsWith('.'))
+  ) {
+    res.writeHead(404)
+    res.end()
+    return
+  }
+  let file = path.resolve(dist, '.' + pathname)
+  if (file !== dist && !file.startsWith(dist + path.sep)) {
+    res.writeHead(404)
+    res.end()
+    return
+  }
+  let stat
+  try {
+    stat = fs.statSync(file)
+    if (!stat.isFile()) stat = undefined
+  } catch {}
+  if (!stat) {
+    if (path.extname(pathname)) {
+      res.writeHead(404)
+      res.end()
+      return
+    }
+    file = path.join(dist, 'index.html')
+    try {
+      stat = fs.statSync(file)
+    } catch {
+      res.writeHead(503, { 'Content-Type': 'text/plain' })
+      res.end('Frontend build missing. Run npm run build.')
+      return
+    }
+  }
+  res.writeHead(200, {
+    'Content-Type': mime[path.extname(file)] || 'application/octet-stream',
+    'Content-Length': stat.size,
+    'Cache-Control': file.includes(path.sep + 'assets' + path.sep)
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  if (req.method === 'HEAD') {
+    res.end()
+    return
+  }
+  pipeline(fs.createReadStream(file), res, () => {})
+}
 async function start() {
+  const next = require('next')
   const app = next({
-    dir,
+    dir: __dirname,
     hostname,
     port,
-    dev: false,
+    dev,
+    webpack: true,
+    turbopack: false,
   })
-
   await app.prepare()
-
+  const handleApi = app.getRequestHandler()
+  let vite
   const server = http.createServer((req, res) => {
-    app.requestHandler(req, res)
+    const pathname = new URL(req.url, 'http://localhost').pathname
+    if (pathname === '/api' || pathname.startsWith('/api/')) {
+      void handleApi(req, res)
+      return
+    }
+    if (dev)
+      vite.middlewares(req, res, () => {
+        res.writeHead(404)
+        res.end()
+      })
+    else serveFrontend(req, res)
   })
-
-  server.listen(port, hostname, () => {
-    console.log(`  Web UI:   http://localhost:${port}`)
-    console.log(`  ComfyUI:  http://127.0.0.1:${process.env.COMFY_PORT || 8188}`)
+  if (dev) {
+    const { createServer } = await import(
+      require.resolve('vite', { paths: [path.join(__dirname, 'web')] })
+    )
+    vite = await createServer({
+      configFile: path.join(__dirname, 'web', 'vite.config.ts'),
+      root: path.join(__dirname, 'web'),
+      server: { middlewareMode: true, ws: { server } },
+    })
+  }
+  server.listen(port, hostname, () =>
+    console.log(`Svelte Studio: http://${hostname}:${port}`),
+  )
+  server.on('error', (error) => {
+    console.error(error.message)
+    process.exitCode = 1
   })
-
-  // Graceful shutdown
-  process.on('SIGINT', () => {
-    server.close(() => process.exit(0))
-  })
-  process.on('SIGTERM', () => {
-    server.close(() => process.exit(0))
-  })
+  async function stop() {
+    await vite?.close()
+    server.close()
+    await app.close()
+    process.exit(0)
+  }
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
 }
-
-start().catch((err) => {
-  console.error('Failed to start server:', err)
-  process.exit(1)
-})
+if (require.main === module)
+  start().catch((error) => {
+    console.error('Failed to start Studio:', error.message)
+    process.exitCode = 1
+  })
+module.exports = { serveFrontend }

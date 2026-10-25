@@ -11,7 +11,7 @@
  * `bump()` после сброса/удаления; useVideoGallery подписывается на
  * `version` и при изменении вызывает `load(true)` (background, без skeleton).
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 
 interface GalleryRefreshState {
   /** Уникальный счётчик: при каждом bump++ все подписчики перезаряжают галерею. */

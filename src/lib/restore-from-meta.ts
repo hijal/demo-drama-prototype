@@ -4,9 +4,9 @@
  *
  * Используется кнопкой «Повторить» на карточках галереи и в диалоге метаданных.
  */
-import { toast } from 'sonner'
+import { toast } from '@/lib/notifications'
 import { useGenStore, type VideoRefItem } from './gen-store'
-import { FALLBACK_H3_PRESETS, collectResolutionValues } from '@/components/h3/video-shared'
+import { FALLBACK_H3_PRESETS, collectResolutionValues } from '@/lib/video-controls'
 
 /** (правка 124) Все номиналы пресетов — чтобы «Повторить» вернул режим
  *  пресета, а не свободный MP (иначе итог снова не был бы точным). */

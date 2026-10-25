@@ -31,13 +31,14 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    "ComfyUI-Easy-Install"
+    "ComfyUI-Easy-Install",
+    "web",
+    "worker"
   ]
 }

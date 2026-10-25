@@ -7,7 +7,7 @@
  *   - Generated videos are loaded from ComfyUI's output directory,
  *     not stored here (only references are kept)
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 
 /* ──────────────────────────── Video Gen ──────────────────────────── */
@@ -164,7 +164,7 @@ interface GenStoreState {
 }
 
 export const useGenStore = create<GenStoreState>()(
-  persist(
+  persist<GenStoreState, [], [], { video: VideoGenState }>(
     (set) => ({
       video: { ...DEFAULT_VIDEO_STATE },
 

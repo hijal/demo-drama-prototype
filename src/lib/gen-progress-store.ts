@@ -11,7 +11,7 @@
  * Generated videos are NOT stored here — they come from
  * ComfyUI's output directory via /api/comfy/files.
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 
 /* ──────────────────── Types ──────────────────── */

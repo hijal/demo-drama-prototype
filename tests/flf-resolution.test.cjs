@@ -4,8 +4,8 @@ const path = require('node:path')
 const { test } = require('node:test')
 const ts = require('typescript')
 
-// Exercise the actual restore and submit functions without mounting React or
-// contacting ComfyUI. Only browser APIs, hooks and stores are replaced.
+// Exercise the framework-independent restore and submit functions without
+// contacting ComfyUI. Only browser APIs and stores are replaced.
 function setup(meta = {}) {
   const storage = new Map()
   const submitted = []
@@ -27,20 +27,19 @@ function setup(meta = {}) {
     if (key === 'error') throw new Error(args.join(' '))
   }]))
   const mocks = {
-    react: { useCallback: fn => fn, useEffect() {}, useRef: current => ({ current }) },
-    sonner: { toast },
+    '@/lib/notifications': { toast },
     '@/lib/gen-progress-store': { useGenProgress: Object.assign(() => progress, { getState: () => progress }) },
     '@/lib/gen-queue-store': { useGenQueue: Object.assign(() => queue, { getState: () => queue }) },
     '@/lib/gen-duration-store': {},
     '@/lib/gen-store': { useGenStore: { getState: () => store } },
     '@/lib/sound': {},
-    '@/components/h3/video-shared': {
+    '@/lib/video-controls': {
       FALLBACK_H3_PRESETS: { '1080p': { landscape: '1920x1080', portrait: '1080x1920' } },
       collectResolutionValues: presets => Object.values(presets).flatMap(Object.values),
     },
   }
   mocks['./gen-store'] = mocks['@/lib/gen-store']
-  mocks.zustand = require('zustand')
+  mocks['zustand/vanilla'] = require('zustand/vanilla')
   const middleware = require('zustand/middleware')
   mocks['zustand/middleware'] = {
     ...middleware,
@@ -95,7 +94,7 @@ test('FLF server-side metadata without flf_resolution repeats exact dimensions',
 
 test('FLF free-resolution output repeats without reinterpreting its aligned pixels', async () => {
   const original = setup()
-  await original.load('src/hooks/use-video-gen.ts').useVideoGen().generate({
+  await original.load('src/lib/video-generation.ts').createVideoGeneration().generate({
     modelType: 'minimax_h3', mode: 'flf', prompt: 'A scene', resolution: '1920x1080',
     firstFrame: 'frame.png', firstFrameWidth: 1920, firstFrameHeight: 1080, finalResolution: 0.7,
   })
@@ -106,7 +105,7 @@ test('FLF free-resolution output repeats without reinterpreting its aligned pixe
   const repeated = setup(original.metadata())
   await repeated.load('src/lib/restore-from-meta.ts').restoreFromMeta('clip.mp4')
   const v = repeated.store.video
-  await repeated.load('src/hooks/use-video-gen.ts').useVideoGen().generate({
+  await repeated.load('src/lib/video-generation.ts').createVideoGeneration().generate({
     ...v, modelType: 'minimax_h3', firstFrame: v.startFrame.path,
     firstFrameWidth: v.startFrame.width, firstFrameHeight: v.startFrame.height,
   })
@@ -159,7 +158,7 @@ for (const [resolution, width, height] of [
   }
   test(`FLF submit metadata matches cropped output at ${resolution}`, async () => {
     const env = setup()
-    await env.load('src/hooks/use-video-gen.ts').useVideoGen().generate({
+    await env.load('src/lib/video-generation.ts').createVideoGeneration().generate({
       modelType: 'minimax_h3', mode: 'flf', prompt: meta.prompt, resolution,
       firstFrame: 'frame.png', firstFrameWidth: width, firstFrameHeight: height,
       ...(resolution === '1152x640' ? { targetDimensions: { width: 1152, height: 640 } } : {}),
@@ -172,7 +171,7 @@ for (const [resolution, width, height] of [
     const env = setup(meta)
     assert.equal(await env.load('src/lib/restore-from-meta.ts').restoreFromMeta('clip.mp4'), true)
     const restored = env.store.video
-    await env.load('src/hooks/use-video-gen.ts').useVideoGen().generate({
+    await env.load('src/lib/video-generation.ts').createVideoGeneration().generate({
       ...restored, modelType: 'minimax_h3',
       firstFrame: restored.startFrame.path,
       firstFrameWidth: restored.startFrame.width, firstFrameHeight: restored.startFrame.height,

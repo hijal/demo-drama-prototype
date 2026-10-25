@@ -1,0 +1,46 @@
+DRAMA SCRIPT
+TITLE: The Parcel
+LOGLINE: A traveller receives a small surprise.
+GENRE: Gentle comedy
+LANGUAGE: English
+ASPECT: 16:9
+RESOLUTION: 1920x1080
+FPS: 24
+STYLE PROMPT: natural morning light, soft film grain
+NEGATIVE PROMPT: unintended text, watermark
+
+== CHARACTERS ==
+CHARACTER @ada | Ada | human
+  FACE: oval face with freckles
+  HAIR: short curly black hair
+  OUTFIT: yellow raincoat
+  VOICE: warm and clear
+  ACCENT: neutral American
+
+== PROPS ==
+PROP @parcel | Parcel
+  LOOK: small blue cardboard box
+  RULE: same colour and size in every scene
+
+== LOCATIONS ==
+LOCATION @porch | Front porch
+  LOOK: wooden steps beside a green door
+  LIGHT: soft morning sunlight
+
+== RULES ==
+RULE: @parcel stays blue.
+
+== SCENES ==
+SCENE 1 | 6s | A delivery
+  AT: @porch, morning
+  CAST: @ada
+  CLIP: hero
+  LIPSYNC: required
+  MOOD: delighted
+  VISUAL: @ada lifts @parcel and smiles.
+  KEYFRAME: @ada's whole face and @parcel are inside frame.
+  CAMERA: static medium shot
+  FRAME: @ada left, @parcel at centre
+  TRANSITION: fade 1s
+  SFX: a doorbell | length: 0.5s | at: 0.5s
+  @ada (delighted): "A surprise for me!" | at: 2s

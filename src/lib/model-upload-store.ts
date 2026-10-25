@@ -12,7 +12,7 @@
  * НЕ прерывает загрузку — XHR живёт в промисе вне компонента, а
  * индикатор подхватывается новым экземпляром панели.
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 
 /** Куда грузится файл — чтобы панели могли показывать «уже идёт загрузка» своей цели. */
 export type UploadTarget = 'diffusion' | 'lora'

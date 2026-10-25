@@ -4,7 +4,7 @@
  * Every submitted prompt is remembered (deduped, capped). Favorites are
  * pinned to the top. Click on an entry to load it back into the editor.
  */
-import { create } from 'zustand'
+import { createStore as create } from 'zustand/vanilla'
 import { persist } from 'zustand/middleware'
 
 export interface PromptHistoryEntry {

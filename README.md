@@ -24,7 +24,8 @@ Step 7 deletes the runtime automatically after `IDLE_MINUTES` without a generati
 
 ```
 ├── MiniMax_Studio_Colab.ipynb   ← Colab launcher (ComfyUI + Web UI + tunnel)
-├── server.js                    ← Next.js production server
+├── web/                         ← Svelte 5 + Vite frontend
+├── server.js                    ← Svelte static/dev server + ComfyUI API
 ├── next.config.ts
 ├── .env                         ← COMFY_URL / COMFY_ROOT
 ├── config/
@@ -36,7 +37,7 @@ Step 7 deletes the runtime automatically after `IDLE_MINUTES` without a generati
 │   └── Minimax_Studio_Workflow.json  ← workflow for plain ComfyUI
 ├── scripts/
 │   └── build.mjs                ← production build with an 8 GB Node heap
-└── src/                         ← Next.js App Router source
+└── src/                         ← API routes and framework-independent ComfyUI logic
 ```
 
 ## Settings
@@ -70,7 +71,7 @@ Expected files (in `ComfyUI/models/`), downloaded by notebook Step 6:
 ```
 Browser
   │
-  ├─ Next.js App Router (React 19, Tailwind, shadcn/ui)
+  ├─ Svelte 5 + Vite frontend (web/)
   │
   ├─ /api/comfy/*  ── proxy ──►  ComfyUI (:8188)
   │                                └─ Workflow: MiniMax H3 Ref2VA, two-pass latent upscaler
@@ -105,12 +106,32 @@ Browser
 ## Commands (development)
 
 ```bash
-npm install          # dependencies
-npm run dev          # dev server (:3000)
-npm run build        # production build (raises the Node heap to 8 GB)
+npm ci               # root + Svelte workspace dependencies (Node 22.12+, prefer 24)
+npm run dev          # Svelte HMR + existing API on :3000
+npm run build        # Svelte frontend + existing API production build
 npm start            # production server (:3000)
-npm run typecheck    # TypeScript check
+npm run typecheck    # API/shared TypeScript + Svelte diagnostics
 npm test             # resolution metadata and repeat-generation regression tests
+npm run test:ui      # Chromium browser tests (npx playwright install chromium once)
+npm run test:pipeline # script parser/validator/fixer tests (install worker dependencies first)
+npm run typecheck:pipeline
 ```
 
 The Web UI expects ComfyUI at `COMFY_URL` (default `http://127.0.0.1:8188`) and its folder at `COMFY_ROOT`.
+
+The entire frontend now lives in `web/` and uses Svelte 5 + Vite: Generate,
+Gallery, Settings, prompt editor/history, reference uploads, previews and queue.
+Shared form, queue and history stores keep their existing localStorage keys.
+`server.js` serves Svelte on port 3000 and forwards `/api/*` to the existing
+Next.js route handlers. Next.js and its React peer dependencies remain for the
+API runtime; the browser UI does not use React, Radix, Next themes or Sonner.
+
+The new script-to-video pipeline is being built separately in `worker/`. See
+[the script format and local CLI instructions](docs/SCRIPT_FORMAT.md),
+[the Colab-only model decision](docs/COLAB_LLM.md) and
+[the phase status/handoff](docs/PIPELINE_PLAN.md). Install its development tools
+with `npm --prefix worker ci` (Node 22.12+, Node 24 recommended).
+
+Browser tests mock the ComfyUI API and do not run GPU jobs. An actual Colab
+render after migration still needs GPU verification. The notebook now installs
+Node 24 and checks both the API build and `web/dist/index.html` before startup.

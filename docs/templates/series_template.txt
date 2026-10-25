@@ -1,0 +1,54 @@
+DRAMA SCRIPT
+TITLE: Porch Stories
+LOGLINE: A traveller discovers small surprises on a porch.
+GENRE: Gentle comedy
+LANGUAGE: English
+ASPECT: 9:16
+RESOLUTION: 1080x1920
+FPS: 24
+STYLE PROMPT: natural morning light, soft film grain
+NEGATIVE PROMPT: unintended text, watermark
+
+== CHARACTERS ==
+CHARACTER @ada | Ada | human
+  FACE: oval face with freckles
+  HAIR: short curly black hair
+  OUTFIT: yellow raincoat
+  VOICE: warm and clear
+  ACCENT: neutral American
+
+== PROPS ==
+PROP @parcel | Parcel
+  LOOK: small blue cardboard box
+  RULE: same size and colour
+  VARIANT open | E02S01-E02S01 | the lid is open
+
+== LOCATIONS ==
+LOCATION @porch | Front porch
+  LOOK: wooden steps beside a green door
+  LIGHT: morning sunlight
+
+== RULES ==
+RULE: @ada wears the same raincoat in every episode.
+
+== EPISODE 01 | A delivery ==
+SCENE 1 | 6s | A parcel
+  AT: @porch, morning
+  CAST: @ada
+  LIPSYNC: required
+  VISUAL: @ada lifts @parcel.
+  KEYFRAME: her whole face and the box are visible.
+  CAMERA: static medium shot
+  TRANSITION: cut
+  @ada (pleased): "It's here!" | at: 2s
+
+== EPISODE 02 | Inside the box ==
+SCENE 1 | 6s | Opening
+  AT: @porch, morning
+  CAST: @ada
+  LIPSYNC: required
+  VISUAL: @ada opens @parcel and smiles.
+  KEYFRAME: @ada's face above the open box.
+  CAMERA: slow push-in, medium shot
+  TRANSITION: fade 1s
+  @ada (warm): "What a lovely surprise." | at: 2s
