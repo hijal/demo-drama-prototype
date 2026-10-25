@@ -4,6 +4,8 @@ Script `.txt` file হিসেবে দাও। Film হলে EPISODE block 
 
 Use [short_film_template.txt](templates/short_film_template.txt) or [series_template.txt](templates/series_template.txt).
 
+To write a new script with an AI chat, open **Format Script** in the studio sidebar, choose **Single** (one film) or **Episode** (series), copy the prompt and fill in the story idea. The Episode prompt has the AI write the header, the full cast and Episode 01 first, then one more episode each time you reply "next"; paste the replies one after another into a single `.txt` file.
+
 ## Header
 
 Start with `DRAMA SCRIPT`, then one field per line:

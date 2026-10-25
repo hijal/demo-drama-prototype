@@ -45,6 +45,7 @@ CAST, PROPS, LOCATION
 - One narrator: CHARACTER @narrator | Narrator | voice_only, with only VOICE and ACCENT.
 - 2–4 props, each with LOOK (colour, material, size) and RULE (stays identical every time). If a prop visibly changes, add VARIANT name | scene range | description (e.g. VARIANT stirred | 5-6 | ...), using real scene numbers from your script.
 - Prefer one LOCATION with LOOK and LIGHT; add more only if the story really moves.
+- Put characters under == CHARACTERS ==, props under == PROPS == and locations under == LOCATIONS ==, as in the EXAMPLE.
 - == RULES == with RULE lines for continuity and this NOTE: Keep dialogue, narration, music and effects on separate audio tracks.
 
 SCENES
@@ -118,6 +119,8 @@ CHARACTER @narrator | Narrator | voice_only
   VOICE: warm, fond, unhurried
   ACCENT: neutral American
 
+== PROPS ==
+
 PROP @pancakes | Pancake stack
   LOOK: stack of four golden fluffy pancakes on a white round plate with a pat of butter on top
   RULE: same height, colour and plate every time
@@ -130,6 +133,8 @@ PROP @syrup | Maple syrup bottle
 PROP @berries | Bowl of berries
   LOOK: small blue ceramic bowl of fresh blueberries and sliced strawberries
   RULE: same bowl and berry mix every time
+
+== LOCATIONS ==
 
 LOCATION @kitchen | Family kitchen
   LOOK: small bright kitchen with white tiles, a wooden counter, a cast-iron pan on the stove,
@@ -262,5 +267,256 @@ SCENE 6 | 4s | Two Forks
   TRANSITION: fade 1s
 
   @narrator [VO]: "Sunday. The perfect stack." | at: 0.5s
+\`\`\`
+`;
+
+/**
+ * Series version of the prompt. A long series does not fit in one AI reply,
+ * so the AI writes the shared header and cast with Episode 01, then one
+ * episode per "next". The owner pastes the replies one after another into a
+ * single .txt file. The example is synthetic.
+ */
+export const SERIES_SCRIPT_PROMPT = `You are a screenwriter for an AI video pipeline (MiniMax H3). Write an EPISODE SERIES script about the story idea below.
+
+STORY IDEA: <write your idea here>
+GENRE: <e.g. kids comedy, family drama, adventure>
+EPISODES: <number of episodes, e.g. 5, 10, 20>
+SCENES PER EPISODE: <e.g. 9, or "you decide">
+SCENE LENGTH: <seconds per scene, e.g. 10s, or "you decide">
+ASPECT: 9:16
+LANGUAGE: English
+
+HOW TO REPLY
+- A long series does not fit in one reply, so write it in parts. Each reply is ONLY script text inside one code block, no explanations.
+- First reply: the header, == CHARACTERS ==, == PROPS ==, == LOCATIONS ==, == RULES == and == EPISODE 01 ==.
+- When I write "next", reply with ONLY the next episode block (== EPISODE 02 == and its scenes, then 03, and so on). Never repeat the header or cast.
+- The first reply must declare EVERY character, prop and location the whole series will use, including ones that appear only in later episodes. Later episodes must not introduce new IDs.
+- Plan the whole series arc before the first reply so later episodes stay consistent.
+
+TIMING
+- Each scene lasts 2.5–29.9 seconds; prefer 4–12 seconds. Use SCENE LENGTH if given.
+- Scenes longer than about 6 seconds should be split into 2–3 SHOT blocks (each shot 2–5 seconds). Shot durations must add up exactly to the scene duration.
+- RUNTIME in the header is the total of all episodes; EPISODE RUNTIME is one episode.
+
+EPISODE SHAPE
+- Every episode works on its own: a hook in scene 1, a problem that grows, and a payoff in the last scene.
+- Most episodes end on a small cliffhanger or a funny button that leads into the next one. The last episode resolves the whole series.
+- Scene 1 of each episode may have one narrator line that recalls or sets up the episode.
+
+HEADER
+- First line: DRAMA SCRIPT. Then TITLE, LOGLINE, GENRE, LANGUAGE, ASPECT, RESOLUTION, FPS, RUNTIME, EPISODE RUNTIME, STYLE, SETTING, STYLE PROMPT, NEGATIVE PROMPT.
+- ASPECT 9:16 uses RESOLUTION 1080x1920; ASPECT 16:9 uses RESOLUTION 1920x1080.
+- STYLE PROMPT: camera lens, depth of field, film grain, colour grade, material texture. NEGATIVE PROMPT: text, letters, watermark, logo, extra fingers, deformed hands, oversaturated colours.
+- A long value may continue on the next line, indented further than the field.
+
+CAST, PROPS, LOCATIONS
+- Give everything a unique lowercase ID (@name) and use exactly those IDs everywhere, in every episode.
+- Human characters need ALL of: ROLE, AGE, GENDER, FACE, SKIN, EYES, HAIR, BUILD, OUTFIT, ACCESSORIES, PERSONALITY, VOICE, ACCENT. Give each face one distinctive mark (mole, scar, freckles, dimple).
+- Animal or creature characters use the type animal or creature and need ALL of: ROLE, SPECIES, LOOK (size, colours, markings, one distinctive mark), ACCESSORIES, PERSONALITY, VOICE, ACCENT.
+- One narrator: CHARACTER @narrator | Narrator | voice_only, with only VOICE and ACCENT.
+- Props have LOOK (colour, material, size) and RULE (stays identical every time). If a prop visibly changes, add VARIANT name | range | description, with series ranges like E02S02-E02S03 (episode and scene numbers that exist).
+- Every LOCATION has LOOK and LIGHT. Reuse a few locations across the series instead of a new one per scene.
+- Put characters under == CHARACTERS ==, props under == PROPS == and locations under == LOCATIONS ==.
+- == RULES == with RULE lines for continuity and this NOTE: Keep dialogue, narration, music and effects on separate audio tracks.
+
+EPISODES AND SCENES
+- Episode header: == EPISODE 01 | Episode title ==, numbered 01, 02, 03…
+- Scene numbers restart at 1 in every episode: SCENE n | Ns | Title. Scene fields are indented 2 spaces; SHOT fields 4 spaces.
+- Every scene has AT: @location (add the time of day in scene 1 of each episode and on any location change).
+- CAST lists everyone visible or speaking. Mark partly visible characters "(glimpsed)" and the narrator "@narrator (voice)".
+- Every scene has MOOD. Scene 1 of each episode has the full MUSIC line: MUSIC: Description. | sound: instruments, tempo | fade_in: 0.5s | fade_out: 1s. Later scenes repeat MUSIC: Description.
+- Scenes without shots need CLIP, LIPSYNC, VISUAL, KEYFRAME, CAMERA, FRAME. Each SHOT n | Ns | wide/close-up needs LIPSYNC, VISUAL, KEYFRAME, CAMERA, FRAME; mark the dialogue shot CLIP: hero.
+- CLIP is still or hero. LIPSYNC is required when a visible character speaks, otherwise none.
+- VISUAL = the action in one sentence. KEYFRAME = the exact frozen image at the end (who, where, paws/hands, eyes). CAMERA = shot size + movement. FRAME = who is left/centre/right.
+- SFX: Short description. | sound: precise sound | length: Ns | at: Ns
+- Optional ACTION: description | at: Ns
+- Dialogue: @id (emotion): "line" | at: Ns, narrator: @narrator [VO]: "line" | at: Ns
+- At most ONE spoken line per scene or shot, 2–7 words, so it fits the time. Every speaker must be in CAST. Every at: time + length must stay inside its scene/shot (shot times are relative to the shot).
+- The first and last scene of each episode have TRANSITION (cut, fade 1s). Use no other syntax.
+
+EXAMPLE (two short episodes of three scenes, only to show the format; follow EPISODES, SCENES PER EPISODE and SCENE LENGTH above)
+\`\`\`
+DRAMA SCRIPT
+
+TITLE: Pip and the Red Bucket
+LOGLINE: A curious goat keeps stealing the farmer's red bucket, until she finds out why.
+GENRE: Kids comedy
+LANGUAGE: English
+ASPECT: 9:16
+RESOLUTION: 1080x1920
+FPS: 24
+RUNTIME: 48s
+EPISODE RUNTIME: 24s
+STYLE: bright cinematic realism, small family farm in spring
+SETTING: A small farm with a red barn and an apple orchard.
+STYLE PROMPT: cinematic film still, 35mm lens, shallow depth of field, soft film grain,
+    fresh spring colour grade, realistic fur and wood texture
+NEGATIVE PROMPT: text, letters, watermark, logo, extra fingers, deformed hands,
+    oversaturated colours
+
+== CHARACTERS ==
+
+CHARACTER @rosa | Rosa Alvarez | human
+  ROLE: farmer
+  AGE: 52
+  GENDER: female
+  FACE: round face, laugh lines, small mole above the left lip
+  SKIN: warm brown
+  EYES: dark brown, kind
+  HAIR: grey-streaked black hair in a low bun
+  BUILD: short, sturdy
+  OUTFIT: faded denim overalls over a white T-shirt, green rubber boots
+  ACCESSORIES: wide straw hat
+  PERSONALITY: patient, warm, a little stubborn
+  VOICE: low, warm, slightly husky
+  ACCENT: soft Mexican-American
+
+CHARACTER @pip | Pip | animal
+  ROLE: mischievous young goat
+  SPECIES: goat
+  LOOK: small white goat with a brown patch over the right eye, short curved horns, a tiny beard
+  ACCESSORIES: red collar with a small brass bell
+  PERSONALITY: curious, cheeky, loyal
+  VOICE: bright, bleating, playful
+  ACCENT: none
+
+CHARACTER @narrator | Narrator | voice_only
+  VOICE: friendly, playful storyteller
+  ACCENT: neutral American
+
+== PROPS ==
+
+PROP @bucket | Red bucket
+  LOOK: small round red metal bucket with a silver handle
+  RULE: same colour, size and handle every time
+  VARIANT apples | E02S02-E02S03 | the same bucket filled to the top with shiny red apples
+
+== LOCATIONS ==
+
+LOCATION @barn | Red barn yard
+  LOOK: red wooden barn with white trim, a hay bale beside the open door, a muddy yard
+  LIGHT: bright spring morning sun from the left
+
+LOCATION @orchard | Apple orchard
+  LOOK: rows of short apple trees heavy with red apples, green grass between them
+  LIGHT: warm afternoon sun through the leaves
+
+== RULES ==
+
+RULE: @pip always wears the red collar with the bell.
+RULE: @bucket stays empty until episode 2, scene 2.
+NOTE: Keep dialogue, narration, music and effects on separate audio tracks.
+
+== EPISODE 01 | The Missing Bucket ==
+
+SCENE 1 | 8s | Morning Chores
+  AT: @barn, morning
+  CAST: @rosa, @narrator (voice)
+  CLIP: still
+  LIPSYNC: none
+  MOOD: calm, busy
+  VISUAL: @rosa sets @bucket down beside the hay bale and turns to open the barn door.
+  KEYFRAME: @rosa at the barn door, @bucket on the ground beside the hay bale.
+  CAMERA: Medium wide shot, static.
+  FRAME: @rosa right at the door; @bucket left by the hay bale
+  MUSIC: Playful banjo. | sound: light plucked banjo, bouncy tempo | fade_in: 0.5s | fade_out: 1s
+  TRANSITION: cut
+  SFX: A barn door creaks. | sound: old wooden door creak | length: 1.5s | at: 4s
+
+  @narrator [VO]: "Every morning, the bucket waited." | at: 1s
+
+SCENE 2 | 8s | Gone
+  AT: @barn
+  CAST: @rosa, @pip (glimpsed)
+  MOOD: puzzled
+  MUSIC: Playful banjo.
+
+  SHOT 1 | 4s | wide
+    LIPSYNC: none
+    VISUAL: @pip trots past the hay bale with @bucket's handle in his mouth.
+    KEYFRAME: @pip mid-trot, @bucket swinging from his mouth, bell on his collar.
+    CAMERA: Wide shot, slow pan right.
+    FRAME: @pip centre, moving right; hay bale left
+    SFX: A collar bell jingles. | sound: small brass bell jingling | length: 1s | at: 0.5s
+
+  SHOT 2 | 4s | close-up
+    CLIP: hero
+    LIPSYNC: required
+    VISUAL: @rosa turns back and stares at the empty spot by the hay bale.
+    KEYFRAME: @rosa's surprised face, eyebrows raised, looking down.
+    CAMERA: Close-up on her face, static.
+    FRAME: @rosa centred
+    @rosa (puzzled): "Where did it go?" | at: 1s
+
+SCENE 3 | 8s | Bell in the Trees
+  AT: @orchard, afternoon
+  CAST: @rosa
+  CLIP: hero
+  LIPSYNC: required
+  MOOD: curious
+  VISUAL: @rosa walks between the apple trees, listening, one hand on her straw hat.
+  KEYFRAME: @rosa between two apple trees, head tilted, listening.
+  CAMERA: Medium shot, slow push-in.
+  FRAME: @rosa centred between the trees
+  MUSIC: Playful banjo.
+  TRANSITION: fade 1s
+  SFX: A distant bell jingles. | sound: faint brass bell far away | length: 1s | at: 0.5s
+
+  @rosa (whispering): "I hear you, Pip." | at: 3s
+
+== EPISODE 02 | The Apple Gift ==
+
+SCENE 1 | 8s | Found
+  AT: @orchard, afternoon
+  CAST: @rosa, @pip, @narrator (voice)
+  CLIP: still
+  LIPSYNC: none
+  MOOD: tense, then surprised
+  VISUAL: @rosa steps around a tree and finds @pip standing proudly beside @bucket.
+  KEYFRAME: @pip beside @bucket under an apple tree, @rosa stopping in front of them.
+  CAMERA: Medium wide shot, static.
+  FRAME: @rosa left; @pip and @bucket right
+  MUSIC: Playful banjo. | sound: light plucked banjo, bouncy tempo | fade_in: 0.5s | fade_out: 1s
+  TRANSITION: cut
+
+  @narrator [VO]: "Pip had a plan." | at: 1s
+
+SCENE 2 | 8s | Full of Apples
+  AT: @orchard
+  CAST: @rosa, @pip
+  MOOD: amazed
+  MUSIC: Playful banjo, brighter.
+
+  SHOT 1 | 4s | close-up
+    LIPSYNC: none
+    VISUAL: @pip nudges @bucket forward with his nose, showing it is full of apples.
+    KEYFRAME: @bucket full of red apples, @pip's nose touching its rim.
+    CAMERA: Close-up on the bucket, slight tilt down.
+    FRAME: @bucket centred; @pip's head right
+    SFX: Apples knock together. | sound: soft wooden thuds of apples | length: 1s | at: 1s
+
+  SHOT 2 | 4s | close-up
+    CLIP: hero
+    LIPSYNC: required
+    VISUAL: @rosa kneels down and laughs softly.
+    KEYFRAME: @rosa kneeling, smiling, eyes on @pip.
+    CAMERA: Close-up on her face, gentle drift in.
+    FRAME: @rosa centred
+    @rosa (laughing): "You picked these?" | at: 1s
+
+SCENE 3 | 8s | Best Helper
+  AT: @orchard
+  CAST: @rosa, @pip, @narrator (voice)
+  CLIP: still
+  LIPSYNC: none
+  MOOD: warm
+  VISUAL: @rosa carries @bucket toward the barn while @pip trots proudly beside her.
+  KEYFRAME: @rosa and @pip side by side walking away, @bucket full of apples in her hand.
+  CAMERA: Wide shot from behind, static.
+  FRAME: @rosa left; @pip right
+  MUSIC: Playful banjo, brighter.
+  TRANSITION: fade 1s
+
+  @narrator [VO]: "Best helper on the farm." | at: 2s
 \`\`\`
 `;

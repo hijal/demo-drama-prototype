@@ -1,16 +1,17 @@
 <script lang="ts">
   import { Check, Copy, RotateCcw } from "lucide-svelte";
   import { toast } from "@/lib/notifications";
-  import { SINGLE_SCRIPT_PROMPT } from "../lib/script-format";
+  import { SERIES_SCRIPT_PROMPT, SINGLE_SCRIPT_PROMPT } from "../lib/script-format";
 
   let mode = $state<"single" | "episode">("single");
-  let single = $state(SINGLE_SCRIPT_PROMPT);
+  const defaults = { single: SINGLE_SCRIPT_PROMPT, episode: SERIES_SCRIPT_PROMPT };
+  let prompts = $state({ ...defaults });
   let copied = $state(false);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(single);
+      await navigator.clipboard.writeText(prompts[mode]);
       copied = true;
       clearTimeout(copiedTimer);
       copiedTimer = setTimeout(() => (copied = false), 1500);
@@ -48,34 +49,26 @@
     {/each}
   </div>
 
-  {#if mode === "single"}
-    <div class="flex items-center gap-2">
-      <button
-        onclick={copy}
-        class="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium gradient-creative text-white"
-      >
-        {#if copied}<Check class="w-3.5 h-3.5" />Copied{:else}<Copy
-            class="w-3.5 h-3.5"
-          />Copy{/if}
-      </button>
-      <button
-        onclick={() => (single = SINGLE_SCRIPT_PROMPT)}
-        disabled={single === SINGLE_SCRIPT_PROMPT}
-        class="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-[var(--surface-2)] disabled:opacity-40 disabled:pointer-events-none"
-        ><RotateCcw class="w-3.5 h-3.5" />Reset</button
-      >
-    </div>
-    <textarea
-      aria-label="Single script prompt"
-      bind:value={single}
-      spellcheck="false"
-      class="flex-1 min-h-0 w-full resize-none rounded-lg border border-border bg-[var(--surface-1)] p-4 font-mono text-xs leading-relaxed text-foreground outline-none focus:border-cyan-500/50"
-    ></textarea>
-  {:else}
-    <div
-      class="flex-1 flex items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground"
+  <div class="flex items-center gap-2">
+    <button
+      onclick={copy}
+      class="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium gradient-creative text-white"
     >
-      Episode format is coming soon.
-    </div>
-  {/if}
+      {#if copied}<Check class="w-3.5 h-3.5" />Copied{:else}<Copy
+          class="w-3.5 h-3.5"
+        />Copy{/if}
+    </button>
+    <button
+      onclick={() => (prompts[mode] = defaults[mode])}
+      disabled={prompts[mode] === defaults[mode]}
+      class="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-[var(--surface-2)] disabled:opacity-40 disabled:pointer-events-none"
+      ><RotateCcw class="w-3.5 h-3.5" />Reset</button
+    >
+  </div>
+  <textarea
+    aria-label={mode === "single" ? "Single script prompt" : "Episode series prompt"}
+    bind:value={prompts[mode]}
+    spellcheck="false"
+    class="flex-1 min-h-0 w-full resize-none rounded-lg border border-border bg-[var(--surface-1)] p-4 font-mono text-xs leading-relaxed text-foreground outline-none focus:border-cyan-500/50"
+  ></textarea>
 </div>
