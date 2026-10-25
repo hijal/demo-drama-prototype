@@ -1,367 +1,522 @@
 <script lang="ts">
-  import Modal from './Modal.svelte'
-  import { gallery, loadGallery, type GalleryFile } from '../lib/gallery'
-  import { api, fileKey, message } from '../lib/api'
-  import { restoreFromMeta } from '@/lib/restore-from-meta'
-  import { useGenStore } from '@/lib/gen-store'
-  import { formatSeconds } from '@/lib/gen-duration-store'
-  import { toast } from '@/lib/notifications'
+  import {
+    Film,
+    Video,
+    Folder,
+    Layers,
+    FolderPlus,
+    Pencil,
+    Trash2,
+    Download,
+    Info,
+    RotateCcw,
+    RefreshCcw,
+    Check,
+    X,
+    ChevronLeft,
+    ChevronRight,
+  } from "lucide-svelte";
+  import Modal from "./Modal.svelte";
+  import Metadata from "./Metadata.svelte";
+  import VideoLightbox from "./VideoLightbox.svelte";
+  import { gallery, loadGallery, type GalleryFile } from "../lib/gallery";
+  import { api, fileKey, message } from "../lib/api";
+  import { restoreFromMeta } from "@/lib/restore-from-meta";
+  import { useGenStore } from "@/lib/gen-store";
+  import { formatSeconds } from "@/lib/gen-duration-store";
+  import { toast } from "@/lib/notifications";
   let {
     embedded = false,
-    folder = '',
-  }: { embedded?: boolean; folder?: string } = $props()
-  let filter = $state('*'),
-    search = $state(''),
-    sort = $state('newest')
-  let selected = $state<string[]>([])
-  let viewing = $state<GalleryFile | null>(null)
+    folder = "",
+  }: { embedded?: boolean; folder?: string } = $props();
+  let creating = $state(false),
+    newName = $state(""),
+    renaming = $state(false),
+    renameValue = $state("");
+  let filter = $state("*"),
+    search = $state(""),
+    sort = $state("newest");
+  let selected = $state<string[]>([]);
+  let viewing = $state<GalleryFile | null>(null);
   let viewerOpen = $state(false),
-    metaOpen = $state(false)
-  let metadata = $state<Record<string, any> | null>(null)
-  let metaError = $state('')
-  let busy = $state(false)
-  let destination = $state('')
-  let selectionMode = $state(false)
+    metaOpen = $state(false);
+  let metadata = $state<Record<string, any> | null>(null);
+  let metaError = $state("");
+  let pendingDelete = $state<GalleryFile | null>(null),
+    deleteOpen = $state(false);
+  let busy = $state(false);
+  let destination = $state("");
+  let selectionMode = $state(false);
   const files = $derived(
     $gallery.files
       .filter(
         (f) =>
           (embedded
             ? f.subfolder === folder
-            : filter === '*' || f.subfolder === filter) &&
+            : filter === "*" || f.subfolder === filter) &&
           f.filename.toLowerCase().includes(search.toLowerCase()),
       )
       .sort((a, b) =>
-        sort === 'name'
+        sort === "name"
           ? a.filename.localeCompare(b.filename)
-          : sort === 'oldest'
+          : sort === "oldest"
             ? (a.mtime ?? 0) - (b.mtime ?? 0)
             : (b.mtime ?? 0) - (a.mtime ?? 0),
       ),
-  )
+  );
   const selectedFiles = $derived(
     $gallery.files.filter((f) => selected.includes(fileKey(f))),
-  )
+  );
   const download = (f: GalleryFile) =>
-    f.url + (f.url.includes('?') ? '&' : '?') + 'download=1'
+    f.url + (f.url.includes("?") ? "&" : "?") + "download=1";
   function open(file: GalleryFile) {
-    viewing = file
-    viewerOpen = true
+    viewing = file;
+    viewerOpen = true;
   }
   async function repeat(file: GalleryFile) {
-    busy = true
+    busy = true;
     try {
       if (
         await restoreFromMeta(
           file.subfolder ? `${file.subfolder}/${file.filename}` : file.filename,
         )
       ) {
-        viewerOpen = false
-        metaOpen = false
+        viewerOpen = false;
+        metaOpen = false;
       }
     } catch (e) {
-      toast.error(message(e))
+      toast.error(message(e));
     } finally {
-      busy = false
+      busy = false;
     }
   }
   async function showMeta(file: GalleryFile) {
-    viewing = file
-    metadata = null
-    metaError = ''
-    metaOpen = true
+    viewing = file;
+    metadata = null;
+    metaError = "";
+    metaOpen = true;
     try {
       const data = await api(
         `/api/comfy/meta?${new URLSearchParams({ path: file.subfolder ? `${file.subfolder}/${file.filename}` : file.filename })}`,
-      )
-      if (viewing && fileKey(viewing) === fileKey(file)) metadata = data
+      );
+      if (viewing && fileKey(viewing) === fileKey(file)) metadata = data;
     } catch (e) {
-      metaError = message(e)
+      metaError = message(e);
     }
   }
   async function remove(items: GalleryFile[]) {
-    if (
-      !items.length ||
-      !confirm(
-        `Delete ${items.length} video${items.length === 1 ? '' : 's'} permanently?`,
-      )
-    )
-      return
-    busy = true
+    if (!items.length) return;
+    busy = true;
     try {
       for (const file of items)
-        await api('/api/comfy/delete', {
+        await api("/api/comfy/delete", {
           filename: file.filename,
           subfolder: file.subfolder,
-        })
-      selected = []
-      viewerOpen = false
-      toast.success('Videos deleted')
+        });
+      selected = [];
+      viewerOpen = false;
+      toast.success("Videos deleted");
     } catch (e) {
-      toast.error(message(e))
+      toast.error(message(e));
     } finally {
-      await loadGallery()
-      busy = false
+      await loadGallery();
+      busy = false;
     }
   }
   async function move(items: GalleryFile[], to: string) {
-    if (!items.length) return
-    busy = true
+    if (!items.length) return;
+    busy = true;
     try {
       for (const file of items)
-        await api('/api/comfy/move', {
+        await api("/api/comfy/move", {
           filename: file.filename,
           from: file.subfolder,
           to,
-        })
-      selected = []
-      viewerOpen = false
-      toast.success('Videos moved')
+        });
+      selected = [];
+      viewerOpen = false;
+      toast.success("Videos moved");
     } catch (e) {
-      toast.error(message(e))
+      toast.error(message(e));
     } finally {
-      await loadGallery()
-      busy = false
+      await loadGallery();
+      busy = false;
     }
   }
-  async function folderAction(action: 'create' | 'rename' | 'delete') {
-    const old = filter === '*' ? '' : filter
-    if (action !== 'create' && !old) return
+  async function folderAction(
+    action: "create" | "rename" | "delete",
+    chosen?: string,
+  ) {
+    const old = filter === "*" ? "" : filter;
+    if (action !== "create" && !old) return;
     const name =
-      action === 'delete'
+      action === "delete"
         ? old
-        : prompt(
-            action === 'create' ? 'New folder name' : 'Rename folder',
-            old,
-          )?.trim()
+        : chosen !== undefined
+          ? chosen.trim()
+          : prompt(
+              action === "create" ? "New folder name" : "Rename folder",
+              old,
+            )?.trim();
     if (
       !name ||
-      (action === 'delete' && !confirm(`Delete empty folder “${old}”?`))
+      (action === "delete" && !confirm(`Delete empty folder “${old}”?`))
     )
-      return
-    busy = true
+      return;
+    busy = true;
     try {
       const result = await api(
-        '/api/comfy/folders',
-        action === 'rename' ? { from: old, to: name } : { name },
-        action === 'create' ? 'POST' : action === 'rename' ? 'PATCH' : 'DELETE',
-      )
-      const next = action === 'delete' ? '' : result.name || name
-      filter = next
+        "/api/comfy/folders",
+        action === "rename" ? { from: old, to: name } : { name },
+        action === "create" ? "POST" : action === "rename" ? "PATCH" : "DELETE",
+      );
+      const next = action === "delete" ? "" : result.name || name;
+      filter = next;
       if (
-        action !== 'create' &&
+        action !== "create" &&
         useGenStore.getState().video.outputFolder === old
       )
-        useGenStore.getState().patchVideo({ outputFolder: next })
-      toast.success('Folders updated')
+        useGenStore.getState().patchVideo({ outputFolder: next });
+      toast.success("Folders updated");
     } catch (e) {
-      toast.error(message(e))
+      toast.error(message(e));
     } finally {
-      await loadGallery()
-      busy = false
+      await loadGallery();
+      busy = false;
     }
   }
   function toggle(file: GalleryFile) {
-    const key = fileKey(file)
+    const key = fileKey(file);
     selected = selected.includes(key)
       ? selected.filter((k) => k !== key)
-      : [...selected, key]
+      : [...selected, key];
   }
   function adjacent(direction: number) {
-    if (!viewing || !files.length) return
-    const index = files.findIndex((f) => fileKey(f) === fileKey(viewing!))
-    viewing = files[(index + direction + files.length) % files.length]
+    if (!viewing || !files.length) return;
+    const index = files.findIndex((f) => fileKey(f) === fileKey(viewing!));
+    viewing = files[(index + direction + files.length) % files.length];
   }
   function drop(event: DragEvent, to: string) {
-    event.preventDefault()
-    const key = event.dataTransfer?.getData('text/x-h3-file')
-    const file = $gallery.files.find((f) => fileKey(f) === key)
-    if (file) void move([file], to)
+    event.preventDefault();
+    const key = event.dataTransfer?.getData("text/x-h3-file");
+    const file = $gallery.files.find((f) => fileKey(f) === key);
+    if (file) void move([file], to);
   }
 </script>
 
-<div class:gallery-page={!embedded} class="gallery-content">
-  {#if !embedded}<header class="page-heading">
-      <div class="eyebrow">MADE IN YOUR STUDIO</div>
-      <div class="section-head">
-        <h1>Gallery <span class="badge">{$gallery.files.length}</span></h1>
-        <button onclick={loadGallery}>↻ Refresh</button>
-      </div>
-      <p>Your generated scenes, ready to replay and refine.</p>
-    </header>
-    <div class="gallery-toolbar">
-      <input
-        type="search"
-        aria-label="Search videos"
-        placeholder="Search videos…"
-        bind:value={search}
-      /><select aria-label="Sort videos" bind:value={sort}
-        ><option value="newest">Newest first</option><option value="oldest"
-          >Oldest first</option
-        ><option value="name">File name</option></select
-      ><button
-        onclick={() => {
-          selectionMode = !selectionMode
-          selected = []
-        }}>{selectionMode ? 'Done selecting' : 'Select videos'}</button
-      ><button disabled={busy} onclick={() => folderAction('create')}
-        >＋ New folder</button
+<svelte:window
+  onkeydown={(e) => {
+    if (deleteOpen && e.key === "Enter" && !busy) {
+      e.preventDefault();
+      const file = pendingDelete;
+      deleteOpen = false;
+      if (file) void remove([file]);
+    }
+  }}
+/>
+{#snippet grid()}
+  {#if $gallery.error}<p
+      class="text-xs text-red-400 p-3 border border-red-500/20 rounded-lg"
+      role="alert"
+    >
+      {$gallery.error}<button class="ml-2 underline" onclick={loadGallery}
+        >Retry</button
       >
+    </p>
+  {:else if $gallery.loading}<div
+      class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"
+    >
+      {#each Array(8) as _}<div
+          class="aspect-video rounded-lg bg-[var(--surface-2)] animate-pulse"
+        ></div>{/each}
     </div>
-    <div class="folder-bar" aria-label="Gallery folders">
-      <button class:active={filter === '*'} onclick={() => (filter = '*')}
-        >All videos</button
-      ><button
-        class:active={filter === ''}
-        onclick={() => (filter = '')}
-        ondragover={(e) => e.preventDefault()}
-        ondrop={(e) => drop(e, '')}>General</button
-      >{#each $gallery.folders as name}<button
-          class:active={filter === name}
-          onclick={() => (filter = name)}
-          ondragover={(e) => e.preventDefault()}
-          ondrop={(e) => drop(e, name)}>▱ {name}</button
-        >{/each}{#if filter && filter !== '*'}<button
-          disabled={busy}
-          onclick={() => folderAction('rename')}>Rename folder</button
-        ><button disabled={busy} onclick={() => folderAction('delete')}
-          >Delete folder</button
-        >{/if}
-    </div>
-    {#if selectionMode}<div class="selection-bar">
-        <label class="check"
-          ><input
-            type="checkbox"
-            checked={files.length > 0 &&
-              files.every((f) => selected.includes(fileKey(f)))}
-            onchange={(e) =>
-              (selected = e.currentTarget.checked ? files.map(fileKey) : [])}
-          />Select all</label
-        ><span>{selectedFiles.length} selected</span><select
-          aria-label="Move destination"
-          bind:value={destination}
-          ><option value="">General</option
-          >{#each $gallery.folders as name}<option>{name}</option
-            >{/each}</select
-        ><button
-          disabled={busy || !selectedFiles.length}
-          onclick={() => move(selectedFiles, destination)}>Move selected</button
-        ><button
-          class="danger"
-          disabled={busy || !selectedFiles.length}
-          onclick={() => remove(selectedFiles)}>Delete selected</button
-        >
-      </div>{/if}
-  {:else}<div class="section-head gallery-small-heading">
-      <small>{folder || 'General'} · {files.length} videos</small><button
-        onclick={loadGallery}>↻ Refresh</button
-      >
-    </div>{/if}
-  {#if $gallery.error}<div class="error" role="alert">
-      {$gallery.error}<button onclick={loadGallery}>Retry</button>
-    </div>{/if}
-  {#if $gallery.loading}<p class="empty">
-      Loading your videos…
-    </p>{:else if !files.length}<div class="empty gallery-empty">
-      <span>▤</span>
-      <h3>{search ? 'No matching videos' : 'Your story begins here'}</h3>
-      <p>
-        {search
-          ? 'Try another file name.'
-          : 'Generated videos will appear in this space.'}
+  {:else if !files.length}<div
+      class="flex flex-col items-center justify-center h-full text-center py-12"
+    >
+      <Video class="w-10 h-10 text-muted-foreground/30 mb-3" />
+      <p class="text-sm text-muted-foreground">
+        {embedded
+          ? folder
+            ? `In the folder "${folder}» no video yet. New generations will fall into it.`
+            : "The generated videos will appear here. Describe the scene, add a reference image, and click “Generate Video.”"
+          : 'No video yet. Generate the first one in the "Generate" tab.'}
       </p>
-    </div>{:else}<div class="video-grid">
-      {#each files as file (fileKey(file))}<article
-          class="video-card"
-          draggable={!selectionMode}
-          ondragstart={(e) =>
-            e.dataTransfer?.setData('text/x-h3-file', fileKey(file))}
+    </div>
+  {:else}<div class="flex items-center justify-between mb-3">
+      <span
+        class="inline-flex items-center justify-center rounded-md px-2 py-0.5 bg-secondary text-secondary-foreground text-xs font-medium"
+        >{files.length} video</span
+      ><button
+        class="p-1.5 rounded-lg hover:bg-[var(--surface-3)] text-muted-foreground"
+        aria-label="Refresh gallery"
+        onclick={loadGallery}><RefreshCcw class="w-3.5 h-3.5" /></button
+      >
+    </div>
+    <div
+      class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"
+    >
+      {#each files as file, index (fileKey(file))}<article
+          class="group relative aspect-video rounded-lg overflow-hidden border border-border bg-[var(--surface-2)] cursor-pointer"
+          draggable
+          ondragstart={(e) => {
+            e.dataTransfer?.setData("text/x-h3-file", fileKey(file));
+            e.dataTransfer?.setData(
+              "application/x-h3-video",
+              JSON.stringify({
+                filename: file.filename,
+                subfolder: file.subfolder,
+              }),
+            );
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
+          }}
         >
           <button
-            class="video-poster"
+            class="absolute inset-0 w-full h-full"
             aria-label={`Play ${file.filename}`}
-            onclick={() => (selectionMode ? toggle(file) : open(file))}
-            ><video src={file.url} preload="metadata" muted playsinline
-              ><track kind="captions" /></video
-            ><span class="play-icon">▶</span
-            >{#if file.generationTime != null}<span class="time-badge"
-                >{formatSeconds(file.generationTime)}</span
-              >{/if}</button
+            onclick={() => open(file)}
+            ><video
+              class="w-full h-full object-cover pointer-events-none"
+              src={file.url}
+              muted
+              playsinline
+              preload="metadata"><track kind="captions" /></video
+            ></button
           >
-          <div class="video-details">
-            <div class="section-head">
-              {#if selectionMode}<input
-                  type="checkbox"
-                  aria-label={`Select ${file.filename}`}
-                  checked={selected.includes(fileKey(file))}
-                  onchange={() => toggle(file)}
-                />{/if}<strong title={file.filename}>{file.filename}</strong>
-            </div>
-            <small
-              >{file.subfolder || 'General'}{file.mtime
-                ? ` · ${new Date(file.mtime * 1000).toLocaleString()}`
-                : ''}</small
+          <div
+            class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex items-center justify-center gap-1 pointer-events-none"
+          >
+            <a
+              class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white pointer-events-auto"
+              title="Download"
+              href={download(file)}
+              download={file.filename}><Download class="w-3.5 h-3.5" /></a
+            ><button
+              class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white pointer-events-auto"
+              aria-label={`Metadata for ${file.filename}`}
+              onclick={() => showMeta(file)}
+              ><Info class="w-3.5 h-3.5" /></button
+            ><button
+              class="p-1.5 rounded-lg bg-cyan-500/40 hover:bg-cyan-500/60 text-white pointer-events-auto"
+              aria-label={`Repeat ${file.filename}`}
+              disabled={busy}
+              onclick={() => repeat(file)}
+              ><RotateCcw class="w-3.5 h-3.5" /></button
+            ><button
+              class="p-1.5 rounded-lg bg-red-500/40 hover:bg-red-500/60 text-white pointer-events-auto"
+              aria-label={`Delete ${file.filename}`}
+              disabled={busy}
+              onclick={() => {
+                pendingDelete = file;
+                deleteOpen = true;
+              }}><Trash2 class="w-3.5 h-3.5" /></button
             >
-            <div class="video-actions">
-              <button disabled={busy} onclick={() => repeat(file)}
-                >↻ Repeat</button
-              ><button onclick={() => showMeta(file)}>Info</button><a
-                href={download(file)}
-                download={file.filename}>Download</a
-              ><button
-                class="danger"
-                disabled={busy}
-                onclick={() => remove([file])}>Delete</button
-              >
+          </div>
+          <div
+            class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 pointer-events-none"
+          >
+            <div class="flex items-center justify-between gap-1">
+              <p class="text-[10px] text-white/70 truncate font-mono">
+                {file.filename}
+              </p>
+              {#if file.generationTime}<span
+                  class="text-[9px] text-cyan-300/80 font-medium shrink-0"
+                  >{formatSeconds(file.generationTime)}</span
+                >{/if}
             </div>
           </div>
         </article>{/each}
-    </div>{/if}
-</div>
-<Modal bind:open={viewerOpen} title={viewing?.filename || 'Video'} wide
-  >{#if viewing}<video
-      class="lightbox-video"
-      src={viewing.url}
-      controls
-      autoplay
-      playsinline><track kind="captions" /></video
+    </div>
+  {/if}
+{/snippet}
+{#if embedded}{@render grid()}
+{:else}<div class="flex-1 flex flex-row min-h-0 bg-[var(--surface-1)]">
+    <div class="flex-1 flex flex-col min-h-0 min-w-0">
+      <div class="px-6 pt-5 pb-3 shrink-0 aurora-bg">
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <h1
+              class="text-xl font-semibold text-foreground flex items-center gap-2.5"
+            >
+              <span
+                class="w-9 h-9 rounded-xl gradient-creative flex items-center justify-center shrink-0 shadow-lg shadow-violet-500/20"
+                ><Film class="w-4.5 h-4.5 text-white" /></span
+              >Gallery
+            </h1>
+            <p class="text-xs text-muted-foreground mt-1.5">
+              {filter === "*"
+                ? "All videos from all folders"
+                : filter === ""
+                  ? "Shared folder (no projects)"
+                  : `Folder "${filter}»`}{#if !$gallery.loading}
+                · <span class="text-foreground/80 font-medium"
+                  >{files.length}</span
+                > pcs.{/if}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto px-6 pb-6 min-h-0">
+        {@render grid()}
+      </div>
+    </div>
+    <aside
+      class="w-56 border-l border-border flex flex-col bg-[var(--surface-0)]/60 shrink-0"
+      aria-label="Gallery folders"
     >
-    <div class="lightbox-actions">
-      <button onclick={() => adjacent(-1)}>← Previous</button><button
-        onclick={() => adjacent(1)}>Next →</button
-      ><button disabled={busy} onclick={() => repeat(viewing!)}
-        >Repeat generation</button
-      ><button onclick={() => showMeta(viewing!)}>Metadata</button><a
-        class="button"
-        href={download(viewing)}
-        download={viewing.filename}>Download video</a
-      ><select aria-label="Move video to folder" bind:value={destination}
-        ><option value="">General</option
-        >{#each $gallery.folders as name}<option>{name}</option>{/each}</select
-      ><button disabled={busy} onclick={() => move([viewing!], destination)}
-        >Move video</button
-      ><button class="danger" disabled={busy} onclick={() => remove([viewing!])}
-        >Delete video</button
+      <div class="p-3 border-b border-border flex items-center gap-2">
+        <span class="text-xs font-medium text-foreground flex-1">Folders</span
+        ><button
+          class="inline-flex items-center justify-center rounded-md border border-border bg-background shadow-xs h-7 px-2"
+          aria-label="New folder"
+          title="Create Project Folder"
+          onclick={() => {
+            creating = true;
+            newName = "";
+          }}><FolderPlus class="w-3.5 h-3.5" /></button
+        >
+      </div>
+      {#if creating}<div class="p-2 border-b border-border/60 space-y-1.5">
+          <input
+            class="w-full rounded-md border border-border bg-background px-2 py-1 text-[11px]"
+            aria-label="Folder name"
+            placeholder="Folder name..."
+            bind:value={newName}
+            onkeydown={(e) => {
+              if (e.key === "Enter" && newName.trim()) {
+                void folderAction("create", newName);
+                creating = false;
+              }
+              if (e.key === "Escape") creating = false;
+            }}
+          />
+          <div class="flex gap-1.5">
+            <button
+              class="flex-1 h-6 rounded-md text-[10px] bg-primary text-primary-foreground"
+              disabled={!newName.trim()}
+              onclick={() => {
+                void folderAction("create", newName);
+                creating = false;
+              }}>Create</button
+            ><button
+              class="border border-border rounded-md h-6 px-2 text-[10px]"
+              onclick={() => (creating = false)}>Cancel</button
+            >
+          </div>
+        </div>{/if}
+      {#each [{ key: "*", name: "All videos", icon: Layers }, { key: "", name: "General", icon: Film }, ...$gallery.folders.map( (name) => ({ key: name, name, icon: Folder }) )] as item}<div
+          class="group flex items-center gap-2 px-3 py-2 border-b border-border/40 transition-colors {filter ===
+          item.key
+            ? 'bg-violet-500/10'
+            : 'hover:bg-white/5'}"
+          ondragover={(e) => {
+            if (item.key !== "*") e.preventDefault();
+          }}
+          ondrop={(e) => drop(e, item.key)}
+          role="group"
+        >
+          <button
+            class="flex items-center gap-2 flex-1 min-w-0 text-left"
+            onclick={() => (filter = item.key)}
+            ><item.icon
+              class="w-3.5 h-3.5 shrink-0 {filter === item.key
+                ? 'text-violet-400'
+                : 'text-muted-foreground/60'}"
+            /><span
+              class="flex-1 min-w-0 truncate text-[11px] text-foreground/80"
+              >{item.name}</span
+            ><span class="text-[9px] text-muted-foreground/60 tabular-nums"
+              >{item.key === "*"
+                ? $gallery.files.length
+                : $gallery.files.filter((file) => file.subfolder === item.key)
+                    .length}</span
+            ></button
+          >{#if item.key && item.key !== "*"}<button
+              class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground"
+              aria-label={`Rename folder ${item.key}`}
+              onclick={() => {
+                filter = item.key;
+                renaming = true;
+                renameValue = item.key;
+              }}><Pencil class="w-3 h-3" /></button
+            ><button
+              class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-red-400"
+              aria-label={`Delete folder ${item.key}`}
+              onclick={() => {
+                filter = item.key;
+                void folderAction("delete");
+              }}><Trash2 class="w-3 h-3" /></button
+            >{/if}
+        </div>{/each}
+      {#if renaming}<div class="p-2 flex gap-1">
+          <input
+            class="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-[11px]"
+            aria-label="New folder name"
+            bind:value={renameValue}
+          /><button
+            aria-label="Save folder name"
+            onclick={() => {
+              void folderAction("rename", renameValue);
+              renaming = false;
+            }}><Check class="w-3 h-3 text-emerald-400" /></button
+          ><button aria-label="Cancel rename" onclick={() => (renaming = false)}
+            ><X class="w-3 h-3" /></button
+          >
+        </div>{/if}
+      <div
+        class="mt-auto p-3 border-t border-border text-[9px] text-muted-foreground/50 leading-snug"
       >
-    </div>{/if}</Modal
+        Drag the video onto the folder to move it. The folder can be renamed
+        (pencil) or deleted (cross, empty only). You can also select a folder on
+        the “Generate” tab - new videos will be placed in it.
+      </div>
+    </aside>
+  </div>{/if}
+<VideoLightbox
+  bind:open={viewerOpen}
+  file={viewing}
+  {files}
+  onprevious={() => adjacent(-1)}
+  onnext={() => adjacent(1)}
+  ondelete={(file) => remove([file])}
+/>
+<Modal
+  bind:open={metaOpen}
+  title={viewing?.filename || "Generation metadata"}
+  kind="metadata"
+  >{#if metaError}<p class="p-4 text-red-400">
+      {metaError}
+    </p>{:else if metadata}<div class="flex-1 overflow-y-auto p-4 space-y-4">
+      <Metadata
+        data={metadata}
+        onretry={() => repeat(viewing!)}
+        onclose={() => (metaOpen = false)}
+      />
+    </div>{:else}<p class="p-4 text-muted-foreground">
+      Loading metadata…
+    </p>{/if}</Modal
 >
-<Modal bind:open={metaOpen} title="Generation metadata" wide
-  >{#if metaError}<p class="error">{metaError}</p>{:else if metadata}<pre
-      class="metadata">{JSON.stringify(metadata, null, 2)}</pre>
-    <div class="inline">
-      <button class="primary" disabled={busy} onclick={() => repeat(viewing!)}
-        >Load into editor</button
-      ><button
-        onclick={async () => {
-          try {
-            await navigator.clipboard.writeText(
-              JSON.stringify(metadata, null, 2),
-            )
-            toast.success('Metadata copied')
-          } catch {
-            toast.error('Clipboard unavailable')
-          }
-        }}>Copy metadata</button
-      >
-    </div>{:else}<p>Loading metadata…</p>{/if}</Modal
+
+<Modal
+  bind:open={deleteOpen}
+  kind="confirm"
+  title="Delete video?"
+  description={`File "${pendingDelete?.filename || ""}" and its metadata will be deleted irrevocably. This action cannot be undone.`}
+>
+  {#snippet icon()}<Trash2 class="w-4 h-4 text-red-400" />{/snippet}
+  <div class="flex justify-end gap-2 mt-1">
+    <button
+      class="h-8 px-3 rounded-md border border-border bg-input/30 text-xs"
+      onclick={() => (deleteOpen = false)}>Cancel</button
+    ><button
+      class="h-8 px-3 rounded-md bg-destructive text-white text-xs inline-flex items-center gap-2"
+      onclick={() => {
+        const file = pendingDelete;
+        deleteOpen = false;
+        if (file) void remove([file]);
+      }}><Trash2 class="w-3.5 h-3.5" />Delete</button
+    >
+  </div>
+  <p class="text-[10px] text-muted-foreground/50 text-right -mt-1">
+    Enter - delete Esc - cancel
+  </p></Modal
 >

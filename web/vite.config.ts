@@ -1,27 +1,28 @@
-import { defineConfig } from 'vite'
-import { svelte } from '@sveltejs/vite-plugin-svelte'
-import { fileURLToPath } from 'node:url'
+import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { fileURLToPath } from "node:url";
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [tailwindcss(), svelte()],
   resolve: {
-    alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) },
+    alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   },
   server: {
     fs: {
-      allow: [fileURLToPath(new URL('..', import.meta.url))],
+      allow: [fileURLToPath(new URL("..", import.meta.url))],
       deny: [
-        '**/.dev.vars',
-        '**/.env',
-        '**/.env.*',
-        '**/*.{crt,pem}',
-        '**/.git/**',
-        '**/.local-input/**',
-        '**/.pipeline-review/**',
-        '**/*.fixed.txt',
-        '**/*.report.json',
+        "**/.dev.vars",
+        "**/.env",
+        "**/.env.*",
+        "**/*.{crt,pem}",
+        "**/.git/**",
+        "**/.local-input/**",
+        "**/.pipeline-review/**",
+        "**/*.fixed.txt",
+        "**/*.report.json",
       ],
     },
-    proxy: { '/api': 'http://127.0.0.1:3000' },
+    proxy: { "/api": "http://127.0.0.1:3000" },
   },
-  build: { outDir: 'dist', emptyOutDir: true },
-})
+  build: { outDir: "dist", emptyOutDir: true },
+});

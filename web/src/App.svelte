@@ -4,6 +4,7 @@
   import Gallery from "./components/Gallery.svelte";
   import Settings from "./components/Settings.svelte";
   import Queue from "./components/Queue.svelte";
+  import Sidebar from "./components/Sidebar.svelte";
   import Pipeline from "./components/Pipeline.svelte";
   import { createVideoGeneration } from "@/lib/video-generation";
   import type { Notice } from "@/lib/notifications";
@@ -15,6 +16,7 @@
   let capabilitiesReady = $state(false);
   let settings = $state(false);
   let connected = $state(false);
+  let checking = $state(true);
   let stats = $state<any>(null);
   let missing = $state(0);
   let notices = $state<Notice[]>([]);
@@ -43,6 +45,7 @@
           const status = await api("/api/status");
           if (!disposed) connected = !!status.gpu?.length;
         } catch {}
+        checking = false;
         polling = false;
         return;
       }
@@ -59,6 +62,7 @@
             (m: any) => !m.optional && m.status !== "ready",
           ).length;
       }
+      checking = false;
       polling = false;
     }
     window.addEventListener("h3:notice", notice);
@@ -70,7 +74,6 @@
         if (disposed) return;
         if (capabilities.manual === false) {
           manual = false;
-          tab = "pipeline";
         } else {
           controller = createVideoGeneration();
           stopGallery = startGallery();
@@ -92,7 +95,7 @@
   });
   async function freeMemory() {
     try {
-      await api("/api/comfy/free", {});
+      await api("/api/comfy/free", { weights: "high" });
       toast.success("GPU memory released");
     } catch (e) {
       toast.error(message(e));
@@ -100,92 +103,74 @@
   }
 </script>
 
-<div class="studio">
-  <aside class="sidebar">
-    <a
-      class="brand"
-      href="#generate"
-      onclick={() => (tab = manual ? "generate" : "pipeline")}
-      ><span class="brand-mark">M</span><span
-        >MiniMax <strong>H3</strong><small>CREATIVE STUDIO</small></span
-      ></a
-    >
-    <div class="nav-caption">WORKSPACE</div>
-    <nav aria-label="Main navigation">
-      <button
-        aria-label="Projects"
-        class:active={tab === "pipeline"}
-        onclick={() => (tab = "pipeline")}
-        ><span>▤</span><span class="pipeline-nav-label">Projects</span></button
+<div class="h-screen w-screen flex overflow-hidden">
+  <Sidebar
+    {tab}
+    onnavigate={(next) => (tab = next)}
+    onfree={freeMemory}
+    onsettings={() => (settings = true)}
+    {connected}
+    {checking}
+    {manual}
+    {stats}
+  />
+  <main class="flex-1 min-w-0 relative flex flex-col">
+    {#if missing > 0}<div
+        class="px-4 py-2 text-xs text-amber-400 bg-amber-500/10 border-b border-amber-500/20"
       >
-      {#if capabilitiesReady && manual}<button
-          aria-label="Generate"
-          class:active={tab === "generate"}
-          onclick={() => (tab = "generate")}><span>✧</span> Generate</button
-        ><button
-          aria-label="Gallery"
-          class:active={tab === "gallery"}
-          onclick={() => (tab = "gallery")}><span>▦</span> Gallery</button
-        >
-      {/if}
-    </nav>
-    <div class="sidebar-bottom">
-      <div class="connection">
-        <span class:online={connected} class="status-dot"></span>{connected
-          ? manual
-            ? "ComfyUI connected"
-            : "Colab online"
-          : manual
-            ? "ComfyUI offline"
-            : "Colab offline"}
-      </div>
-      {#if stats}<div class="system-stats">
-          <small>CPU {Number(stats.cpu?.percent ?? 0).toFixed(0)}%</small><small
-            >RAM {Number(stats.ram?.used_gb ?? 0).toFixed(1)} / {Number(
-              stats.ram?.total_gb ?? 0,
-            ).toFixed(0)} GB</small
-          ><small
-            >VRAM {Number(stats.gpu?.vram_used_gb ?? 0).toFixed(1)} / {Number(
-              stats.gpu?.vram_total_gb ?? 0,
-            ).toFixed(0)} GB</small
-          ><button onclick={freeMemory}>Free GPU memory</button>
-        </div>{/if}
-      {#if capabilitiesReady && manual}<button
-          aria-label="Settings"
-          class="settings-nav"
-          onclick={() => (settings = true)}>⚙ Settings</button
-        >{/if}<small class="version">MiniMax H3 · Video + Audio</small>
-    </div>
-  </aside>
-  <main>
-    {#if missing > 0}<div class="warning-banner">
         {missing} required model files need attention.
-        <button onclick={() => (settings = true)}>Open models</button>
+        <button class="underline" onclick={() => (settings = true)}
+          >Open models</button
+        >
       </div>{/if}
-    {#if tab === "pipeline"}<div class="view"><Pipeline /></div>{/if}
-    {#if capabilitiesReady && manual}<div
-        class="view"
-        hidden={tab !== "generate"}
-      >
-        <Generate {controller} />
-      </div>
-      <div class="view" hidden={tab !== "gallery"}><Gallery /></div>{/if}
+    <div class="flex-1 min-h-0 relative">
+      {#if capabilitiesReady}
+        <div
+          class="h-full flex"
+          style:display={tab === "generate" ? "flex" : "none"}
+        >
+          <Generate
+            {controller}
+            enabled={manual}
+            visible={tab === "generate"}
+          />
+        </div>
+        <div
+          class="h-full flex"
+          style:display={tab === "gallery" ? "flex" : "none"}
+        >
+          <Gallery />
+        </div>
+        {#if tab === "pipeline"}<div
+            class="h-full overflow-auto pipeline-shell"
+          >
+            <Pipeline />
+          </div>{/if}
+      {/if}
+    </div>
+    {#if manual}<Queue />{/if}
   </main>
-  {#if capabilitiesReady && manual}<Queue /><Settings
-      bind:open={settings}
-    />{/if}
-  <div class="notices" aria-live="polite">
+  <Settings bind:open={settings} enabled={manual} />
+  <div
+    class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm"
+    aria-live="polite"
+  >
     {#each notices as notice (notice.id)}<div
-        class="notice"
-        class:error={notice.kind === "error"}
+        class="rounded-lg border border-border bg-[var(--surface-3)] px-4 py-3 shadow-lg text-sm {notice.kind ===
+        'error'
+          ? 'text-red-400'
+          : 'text-foreground'}"
         role={notice.kind === "error" ? "alert" : "status"}
       >
-        <strong>{notice.text}</strong>{#if notice.description}<p>
+        <strong>{notice.text}</strong>{#if notice.description}<p
+            class="text-xs text-muted-foreground mt-1"
+          >
             {notice.description}
           </p>{/if}<button
+          class="ml-3 text-muted-foreground"
           aria-label="Dismiss notification"
           onclick={() => (notices = notices.filter((n) => n.id !== notice.id))}
-          >✕</button
+          >×</button
         >
       </div>{/each}
   </div>
