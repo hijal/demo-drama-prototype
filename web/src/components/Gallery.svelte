@@ -15,15 +15,17 @@
     X,
     ChevronLeft,
     ChevronRight,
+    Loader2,
   } from "lucide-svelte";
   import Modal from "./Modal.svelte";
   import Metadata from "./Metadata.svelte";
+  import { readable } from "../lib/store";
   import VideoLightbox from "./VideoLightbox.svelte";
   import { gallery, loadGallery, type GalleryFile } from "../lib/gallery";
   import { api, fileKey, message } from "../lib/api";
   import { restoreFromMeta } from "@/lib/restore-from-meta";
   import { useGenStore } from "@/lib/gen-store";
-  import { formatSeconds } from "@/lib/gen-duration-store";
+  import { formatSeconds, formatDuration, useGenDurations } from "@/lib/gen-duration-store";
   import { toast } from "@/lib/notifications";
   let {
     embedded = false,
@@ -32,6 +34,8 @@
   let creating = $state(false),
     newName = $state(""),
     renaming = $state(false),
+    renameKey = $state(""),
+    dragOver = $state<string | null>(null),
     renameValue = $state("");
   let filter = $state("*"),
     search = $state(""),
@@ -202,6 +206,17 @@
     const file = $gallery.files.find((f) => fileKey(f) === key);
     if (file) void move([file], to);
   }
+  /** Poster width: server-side extracted, disk-cached JPEG frame. */
+  const THUMB_WIDTH = 600;
+  const durationStore = readable(useGenDurations);
+  /** Generation time from metadata, else from the locally recorded duration. */
+  function genLabel(file: { filename: string; generationTime?: number | null }) {
+    if (typeof file.generationTime === "number" && file.generationTime > 0) return formatSeconds(file.generationTime);
+    const entry = [...$durationStore.entries]
+      .sort((a, b) => b.ts - a.ts)
+      .find((e) => e.filename === file.filename);
+    return entry ? formatDuration(entry.durationMs) : null;
+  }
 </script>
 
 <svelte:window
@@ -247,7 +262,8 @@
         class="inline-flex items-center justify-center rounded-md px-2 py-0.5 bg-secondary text-secondary-foreground text-xs font-medium"
         >{files.length} video</span
       ><button
-        class="p-1.5 rounded-lg hover:bg-[var(--surface-3)] text-muted-foreground"
+        class="p-1.5 rounded-lg hover:bg-[var(--surface-3)] text-muted-foreground transition-colors"
+        title="Refresh"
         aria-label="Refresh gallery"
         onclick={loadGallery}><RefreshCcw class="w-3.5 h-3.5" /></button
       >
@@ -257,6 +273,14 @@
     >
       {#each files as file, index (fileKey(file))}<article
           class="group relative aspect-video rounded-lg overflow-hidden border border-border bg-[var(--surface-2)] cursor-pointer"
+          onpointerenter={(e) => e.currentTarget.querySelector("video")?.play().catch(() => {})}
+          onpointerleave={(e) => {
+            const v = e.currentTarget.querySelector("video");
+            if (v) {
+              v.pause();
+              v.currentTime = 0;
+            }
+          }}
           draggable
           ondragstart={(e) => {
             e.dataTransfer?.setData("text/x-h3-file", fileKey(file));
@@ -277,32 +301,38 @@
             ><video
               class="w-full h-full object-cover pointer-events-none"
               src={file.url}
+              poster={`${file.url}${file.url.includes("?") ? "&" : "?"}width=${THUMB_WIDTH}`}
               muted
+              loop
+              preload="none"
               playsinline
-              preload="metadata"><track kind="captions" /></video
+              onloadedmetadata={(e) => (e.currentTarget.currentTime = 0)}><track kind="captions" /></video
             ></button
           >
           <div
             class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex items-center justify-center gap-1 pointer-events-none"
           >
             <a
-              class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white pointer-events-auto"
+              class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition-colors pointer-events-auto"
               title="Download"
               href={download(file)}
               download={file.filename}><Download class="w-3.5 h-3.5" /></a
             ><button
-              class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white pointer-events-auto"
+              class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition-colors pointer-events-auto"
+              title="Metadata"
               aria-label={`Metadata for ${file.filename}`}
               onclick={() => showMeta(file)}
               ><Info class="w-3.5 h-3.5" /></button
             ><button
-              class="p-1.5 rounded-lg bg-cyan-500/40 hover:bg-cyan-500/60 text-white pointer-events-auto"
+              class="p-1.5 rounded-lg bg-cyan-500/40 hover:bg-cyan-500/60 text-white transition-colors pointer-events-auto"
+              title="Repeat generation (restore all parameters)"
               aria-label={`Repeat ${file.filename}`}
               disabled={busy}
               onclick={() => repeat(file)}
               ><RotateCcw class="w-3.5 h-3.5" /></button
             ><button
-              class="p-1.5 rounded-lg bg-red-500/40 hover:bg-red-500/60 text-white pointer-events-auto"
+              class="p-1.5 rounded-lg bg-red-500/40 hover:bg-red-500/60 text-white transition-colors pointer-events-auto"
+              title="Delete"
               aria-label={`Delete ${file.filename}`}
               disabled={busy}
               onclick={() => {
@@ -316,11 +346,11 @@
           >
             <div class="flex items-center justify-between gap-1">
               <p class="text-[10px] text-white/70 truncate font-mono">
-                {file.filename}
+                {String(files.length - index).padStart(3, "0")}
               </p>
-              {#if file.generationTime}<span
+              {#if genLabel(file)}<span
                   class="text-[9px] text-cyan-300/80 font-medium shrink-0"
-                  >{formatSeconds(file.generationTime)}</span
+                  title="Generation time (from metadata)">{genLabel(file)}</span
                 >{/if}
             </div>
           </div>
@@ -366,7 +396,7 @@
       <div class="p-3 border-b border-border flex items-center gap-2">
         <span class="text-xs font-medium text-foreground flex-1">Folders</span
         ><button
-          class="inline-flex items-center justify-center rounded-md border border-border bg-background shadow-xs h-7 px-2"
+          class="inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-md font-medium transition-all border shadow-xs bg-background hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50 h-7 px-3 text-xs"
           aria-label="New folder"
           title="Create Project Folder"
           onclick={() => {
@@ -377,7 +407,9 @@
       </div>
       {#if creating}<div class="p-2 border-b border-border/60 space-y-1.5">
           <input
-            class="w-full rounded-md border border-border bg-background px-2 py-1 text-[11px]"
+            class="w-full rounded-md border border-border bg-background px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-violet-500/40"
+            maxlength="60"
+            {@attach (node) => node.focus()}
             aria-label="Folder name"
             placeholder="Folder name..."
             bind:value={newName}
@@ -391,84 +423,123 @@
           />
           <div class="flex gap-1.5">
             <button
-              class="flex-1 h-6 rounded-md text-[10px] bg-primary text-primary-foreground"
+              class="inline-flex items-center justify-center rounded-md font-medium transition-all disabled:pointer-events-none disabled:opacity-50 shadow-xs bg-primary text-primary-foreground hover:bg-primary/90 h-6 text-[10px] px-2 flex-1"
               disabled={!newName.trim()}
               onclick={() => {
                 void folderAction("create", newName);
                 creating = false;
               }}>Create</button
             ><button
-              class="border border-border rounded-md h-6 px-2 text-[10px]"
+              class="inline-flex items-center justify-center rounded-md font-medium transition-all border shadow-xs bg-background hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50 h-6 text-[10px] px-2"
               onclick={() => (creating = false)}>Cancel</button
             >
           </div>
         </div>{/if}
-      {#each [{ key: "*", name: "All videos", icon: Layers }, { key: "", name: "General", icon: Film }, ...$gallery.folders.map( (name) => ({ key: name, name, icon: Folder }) )] as item}<div
-          class="group flex items-center gap-2 px-3 py-2 border-b border-border/40 transition-colors {filter ===
-          item.key
-            ? 'bg-violet-500/10'
-            : 'hover:bg-white/5'}"
-          ondragover={(e) => {
-            if (item.key !== "*") e.preventDefault();
-          }}
-          ondrop={(e) => drop(e, item.key)}
-          role="group"
-        >
-          <button
-            class="flex items-center gap-2 flex-1 min-w-0 text-left"
+      <div class="flex-1 overflow-y-auto">
+        {#each [{ key: "*", name: "All videos", icon: Layers }, { key: "", name: "General", icon: Film }, ...$gallery.folders.map( (name) => ({ key: name, name, icon: Folder }) )] as item (item.key)}
+          {@const active = filter === item.key}
+          {@const editable = !!item.key && item.key !== "*"}
+          {@const isRenaming = renaming && renameKey === item.key}
+          <div
+            class="group flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-border/40 transition-colors {active
+              ? 'bg-violet-500/10'
+              : 'hover:bg-white/5'} {dragOver === item.key ? 'ring-1 ring-violet-400/60 bg-violet-500/15' : ''}"
+            role="button"
+            tabindex="0"
             onclick={() => (filter = item.key)}
-            ><item.icon
-              class="w-3.5 h-3.5 shrink-0 {filter === item.key
-                ? 'text-violet-400'
-                : 'text-muted-foreground/60'}"
-            /><span
-              class="flex-1 min-w-0 truncate text-[11px] text-foreground/80"
-              >{item.name}</span
-            ><span class="text-[9px] text-muted-foreground/60 tabular-nums"
-              >{item.key === "*"
-                ? $gallery.files.length
-                : $gallery.files.filter((file) => file.subfolder === item.key)
-                    .length}</span
-            ></button
-          >{#if item.key && item.key !== "*"}<button
-              class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground"
-              aria-label={`Rename folder ${item.key}`}
-              onclick={() => {
-                filter = item.key;
-                renaming = true;
-                renameValue = item.key;
-              }}><Pencil class="w-3 h-3" /></button
-            ><button
-              class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-red-400"
-              aria-label={`Delete folder ${item.key}`}
-              onclick={() => {
-                filter = item.key;
-                void folderAction("delete");
-              }}><Trash2 class="w-3 h-3" /></button
-            >{/if}
-        </div>{/each}
-      {#if renaming}<div class="p-2 flex gap-1">
-          <input
-            class="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-[11px]"
-            aria-label="New folder name"
-            bind:value={renameValue}
-          /><button
-            aria-label="Save folder name"
-            onclick={() => {
-              void folderAction("rename", renameValue);
-              renaming = false;
-            }}><Check class="w-3 h-3 text-emerald-400" /></button
-          ><button aria-label="Cancel rename" onclick={() => (renaming = false)}
-            ><X class="w-3 h-3" /></button
+            onkeydown={(e) => e.key === "Enter" && !isRenaming && (filter = item.key)}
+            ondragover={(e) => {
+              if (item.key !== "*") {
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                dragOver = item.key;
+              }
+            }}
+            ondragleave={() => dragOver === item.key && (dragOver = null)}
+            ondrop={(e) => {
+              dragOver = null;
+              drop(e, item.key);
+            }}
           >
-        </div>{/if}
-      <div
-        class="mt-auto p-3 border-t border-border text-[9px] text-muted-foreground/50 leading-snug"
-      >
-        Drag the video onto the folder to move it. The folder can be renamed
-        (pencil) or deleted (cross, empty only). You can also select a folder on
-        the “Generate” tab - new videos will be placed in it.
+            <span class="shrink-0 {active ? 'text-violet-400' : 'text-muted-foreground/60'}"
+              ><item.icon class="w-3.5 h-3.5" /></span
+            >
+            {#if isRenaming}<span
+                class="flex-1 min-w-0 flex items-center gap-1"
+                role="presentation"
+                onclick={(e) => e.stopPropagation()}
+              >
+                <input
+                  bind:value={renameValue}
+                  {@attach (node) => node.focus()}
+                  onkeydown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      filter = item.key;
+                      void folderAction("rename", renameValue);
+                      renaming = false;
+                    }
+                    if (e.key === "Escape") renaming = false;
+                  }}
+                  aria-label="New folder name"
+                  placeholder="New name..."
+                  class="w-full min-w-0 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-violet-500/40"
+                  maxlength="60"
+                />
+                <button
+                  type="button"
+                  onclick={() => {
+                    filter = item.key;
+                    void folderAction("rename", renameValue);
+                    renaming = false;
+                  }}
+                  class="shrink-0 w-4 h-4 flex items-center justify-center text-emerald-400/80 hover:text-emerald-300"
+                  title="Save (Enter)"
+                  aria-label="Save folder name"><Check class="w-3 h-3" /></button
+                >
+                <button
+                  type="button"
+                  onclick={() => (renaming = false)}
+                  class="shrink-0 w-4 h-4 flex items-center justify-center text-muted-foreground/60 hover:text-foreground"
+                  title="Cancel (Esc)"
+                  aria-label="Cancel rename"><X class="w-3 h-3" /></button
+                >
+              </span>{:else}<span class="flex-1 min-w-0 truncate text-[11px] {active ? 'text-foreground' : 'text-foreground/80'}"
+                >{item.name}</span
+              ><span class="text-[9px] text-muted-foreground/60 shrink-0 tabular-nums"
+                >{item.key === "*"
+                  ? $gallery.files.length
+                  : $gallery.files.filter((file) => file.subfolder === item.key).length}</span
+              >{/if}
+            {#if editable && !isRenaming}<button
+                type="button"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  renameKey = item.key;
+                  renaming = true;
+                  renameValue = item.name;
+                }}
+                class="shrink-0 w-4 h-4 flex items-center justify-center text-muted-foreground/40 hover:text-violet-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Rename folder"
+                aria-label={`Rename folder ${item.key}`}><Pencil class="w-3 h-3" /></button
+              ><button
+                type="button"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  filter = item.key;
+                  void folderAction("delete");
+                }}
+                class="shrink-0 w-4 h-4 flex items-center justify-center text-muted-foreground/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Delete folder (empty only)"
+                aria-label={`Delete folder ${item.key}`}><Trash2 class="w-3 h-3" /></button
+              >{/if}
+          </div>
+        {/each}
       </div>
+      <p class="px-3 py-2 text-[9px] text-muted-foreground/50 border-t border-border/60 leading-snug">
+        Drag the video onto the folder to move it. The folder can be renamed (pencil) or deleted (cross, empty only). You
+        can also select a folder on the “Generate” tab - new videos will be placed in it.
+      </p>
     </aside>
   </div>{/if}
 <VideoLightbox
@@ -483,17 +554,23 @@
   bind:open={metaOpen}
   title={viewing?.filename || "Generation metadata"}
   kind="metadata"
-  >{#if metaError}<p class="p-4 text-red-400">
-      {metaError}
-    </p>{:else if metadata}<div class="flex-1 overflow-y-auto p-4 space-y-4">
-      <Metadata
+  >{#snippet icon()}<Info class="w-4 h-4 text-cyan-400 shrink-0" />{/snippet}<div
+    class="flex-1 overflow-y-auto p-4 space-y-4"
+  >
+    {#if !metadata && !metaError}<div class="flex items-center justify-center py-8">
+        <Loader2 class="w-5 h-5 animate-spin text-muted-foreground" />
+        <span class="ml-2 text-sm text-muted-foreground">Loading metadata...</span>
+      </div>{/if}
+    {#if metaError}<div class="text-center py-6">
+        <p class="text-sm text-amber-400">{metaError}</p>
+        <p class="text-xs text-muted-foreground mt-1">Metadata file not found or inaccessible</p>
+      </div>{/if}
+    {#if metadata}<Metadata
         data={metadata}
         onretry={() => repeat(viewing!)}
         onclose={() => (metaOpen = false)}
-      />
-    </div>{:else}<p class="p-4 text-muted-foreground">
-      Loading metadata…
-    </p>{/if}</Modal
+      />{/if}
+  </div></Modal
 >
 
 <Modal
@@ -505,10 +582,11 @@
   {#snippet icon()}<Trash2 class="w-4 h-4 text-red-400" />{/snippet}
   <div class="flex justify-end gap-2 mt-1">
     <button
-      class="h-8 px-3 rounded-md border border-border bg-input/30 text-xs"
+      class="inline-flex items-center justify-center gap-1.5 whitespace-nowrap h-8 px-3 rounded-md text-sm font-medium transition-all border shadow-xs bg-background hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50"
       onclick={() => (deleteOpen = false)}>Cancel</button
     ><button
-      class="h-8 px-3 rounded-md bg-destructive text-white text-xs inline-flex items-center gap-2"
+      class="inline-flex items-center justify-center gap-1.5 whitespace-nowrap h-8 px-3 rounded-md text-sm font-medium transition-all shadow-xs bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
+      {@attach (node) => node.focus()}
       onclick={() => {
         const file = pendingDelete;
         deleteOpen = false;

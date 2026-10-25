@@ -20,8 +20,13 @@
     Download,
     Trash2,
     AlertTriangle,
+    AlertCircle,
+    Loader2,
+    X,
+    FolderOpen,
+    Copy,
   } from "lucide-svelte";
-  import { MODELS } from "@/lib/models-config";
+  import { MODELS, MODEL_CATEGORIES } from "@/lib/models-config";
   import { api, message } from "../lib/api";
   import { readable } from "../lib/store";
   import { uploadModel } from "../lib/model-upload";
@@ -258,6 +263,14 @@
     bytes >= 1024 ** 3
       ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
       : `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  async function copyText(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${what} copied`);
+    } catch {
+      toast.error("Failed to copy");
+    }
+  }
 </script>
 
 {#snippet switchControl(
@@ -356,46 +369,52 @@
                       ? 'border-red-500/30 bg-red-500/5'
                       : 'border-border'}"
               >
-                <CheckCircle
-                  class="w-4 h-4 shrink-0 {model.status === 'ready'
-                    ? 'text-emerald-400'
-                    : 'text-muted-foreground'}"
-                />
+                <div class="shrink-0">
+                  {#if model.status === "ready"}<CheckCircle class="w-4 h-4 text-emerald-400" />{/if}
+                  {#if model.status === "downloading"}<Loader2 class="w-4 h-4 animate-spin text-cyan-400" />{/if}
+                  {#if model.status === "missing"}<Download class="w-4 h-4 text-muted-foreground" />{/if}
+                  {#if model.status === "error"}<AlertCircle class="w-4 h-4 text-red-400" />{/if}
+                </div>
                 <div class="flex-1 min-w-0">
-                  <p class="text-xs font-medium truncate">{model.label}</p>
-                  <p class="text-[10px] text-muted-foreground">
-                    {model.sizeLabel}
-                    {model.optional ? "· optional" : ""}
-                  </p>
-                  {#if model.status === "downloading"}<progress
-                      class="w-full h-1.5"
-                      value={model.bytesReceived ?? 0}
-                      max={model.totalBytes || 1}
-                    ></progress>
-                    <p class="text-[10px] text-muted-foreground">
-                      {size(model.bytesReceived ?? 0)} / {size(
-                        model.totalBytes || 0,
-                      )} · {size(model.speed ?? 0)}/s
-                    </p>{/if}{#if model.error}<p class="text-xs text-red-400">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs truncate">{model.label}</span>
+                    <span class="text-[10px] text-muted-foreground shrink-0">{model.sizeLabel}</span>
+                  </div>
+                  {#if model.status === "downloading"}{@const pct = model.totalBytes
+                      ? Math.min(100, ((model.bytesReceived || 0) / model.totalBytes) * 100)
+                      : null}<div class="mt-1.5 space-y-0.5">
+                      <div class="h-1.5 rounded-full bg-[var(--surface-2)] overflow-hidden">
+                        <div
+                          class="h-full bg-cyan-400 rounded-full transition-all duration-500"
+                          style:width={`${pct ?? 0}%`}
+                        ></div>
+                      </div>
+                      <div class="flex justify-between text-[10px] text-muted-foreground">
+                        <span>{size(model.bytesReceived || 0)}{model.totalBytes ? ` / ${size(model.totalBytes)}` : ""}</span>
+                        <span>{model.speed ? `${size(model.speed)}/s` : ""}{pct !== null ? ` · ${pct.toFixed(1)}%` : ""}</span>
+                      </div>
+                    </div>{/if}
+                  {#if model.status === "error" && model.error}<p class="text-[10px] text-red-400 mt-0.5 truncate">
                       {model.error}
                     </p>{/if}
                 </div>
-                {#if model.status === "downloading"}<button
-                    class={outline}
-                    disabled={busy}
-                    onclick={() => modelAction("cancel", model.id)}
-                    >Cancel</button
-                  >{:else if model.status === "ready"}<button
-                    aria-label={`Delete ${model.label}`}
-                    class="p-1.5 text-muted-foreground hover:text-red-400"
-                    disabled={busy}
-                    onclick={() => modelAction("delete", model.id)}
-                    ><Trash2 class="w-3.5 h-3.5" /></button
-                  >{:else}<button
-                    class={outline}
+                {#if model.status === "missing" || model.status === "error"}<button
+                    class="inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-all disabled:pointer-events-none disabled:opacity-50 border shadow-xs bg-background hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50 h-7 px-3 text-xs shrink-0"
                     disabled={busy}
                     onclick={() => modelAction("download", model.id)}
-                    ><Download class="w-3 h-3" />Download</button
+                    >Download</button
+                  >{/if}
+                {#if model.status === "downloading"}<button
+                    class="inline-flex items-center justify-center rounded-md transition-all h-7 px-3 text-xs shrink-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                    aria-label={`Cancel ${model.label}`}
+                    onclick={() => modelAction("cancel", model.id)}><X class="w-3.5 h-3.5" /></button
+                  >{/if}
+                {#if model.status === "ready" || model.status === "error"}<button
+                    class="inline-flex items-center justify-center rounded-md transition-all disabled:pointer-events-none disabled:opacity-50 h-7 px-3 text-xs shrink-0 text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                    aria-label={`Delete ${model.label}`}
+                    title="Delete model files from disk"
+                    disabled={busy}
+                    onclick={() => modelAction("delete", model.id)}><Trash2 class="w-3.5 h-3.5" /></button
                   >{/if}
               </div>{/each}
           </div>
@@ -593,13 +612,35 @@
           Information about running ComfyUI and devices.
         </p>
         <div class="space-y-2 pt-2 border-t border-border text-sm">
-          {#each [{ label: "Status:", value: stats ? "Connected" : "Not available" }, { label: "ComfyUI version:", value: stats?.system?.comfyui_version || "—" }, { label: "Python:", value: stats?.system?.python_version || "—" }, { label: "Built-in Python:", value: stats?.system?.embedded_python ? "yes" : "no" }, { label: "GPU:", value: stats?.devices?.[0]?.name || "—" }] as row}<div
-              class="flex justify-between"
-            >
-              <span class="text-muted-foreground">{row.label}</span><span
-                >{row.value}</span
-              >
-            </div>{/each}
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Status:</span>
+            {#if stats}<span
+                class="inline-flex items-center justify-center rounded-md border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                ><CheckCircle class="w-3 h-3" />Connected</span
+              >{:else}<span
+                class="inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-destructive text-white"
+                ><AlertCircle class="w-3 h-3" />Not available</span
+              >{/if}
+          </div>
+          {#if stats}
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">ComfyUI version:</span><span>{stats.system?.comfyui_version || "—"}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Python:</span><span>{stats.system?.python_version || "—"}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">Built-in Python:</span><span>{stats.system?.embedded_python ? "yes" : "no"}</span>
+            </div>
+            {#if stats.devices?.length > 0}<div class="flex justify-between">
+                <span class="text-muted-foreground">GPU:</span><span>{stats.devices[0].name}</span>
+              </div>{/if}
+            {#if stats.devices?.[0]?.vram_total}<div class="flex justify-between">
+                <span class="text-muted-foreground">VRAM:</span><span
+                  >{((stats.devices[0].vram_free || 0) / 1024 ** 3).toFixed(1)} / {(stats.devices[0].vram_total / 1024 ** 3).toFixed(1)} GB</span
+                >
+              </div>{/if}
+          {:else}<p class="text-xs text-muted-foreground">Make sure ComfyUI is running on port 8188.</p>{/if}
         </div>
         <button class="{outline} w-full" onclick={refresh}
           ><RefreshCw class="w-3.5 h-3.5" />Check again</button
@@ -619,47 +660,75 @@
           >
         </div>
       </div>
-    {:else if tab === "Links"}<div class="space-y-4 py-2">
+    {:else if tab === "Links"}{@const comfyModelsRoot = config.comfy_dir
+        ? `${config.comfy_dir}/ComfyUI/models/`
+        : "<ComfyUI-Easy-Install>/ComfyUI/models/"}<div class="space-y-3 py-2">
         <div class="flex items-center gap-2 text-sm font-medium">
-          <Link class="w-4 h-4" />Manual download links
+          <Link class="w-4 h-4 text-cyan-400" />
+          Manual loading of models
         </div>
-        <p class="text-[11px] text-muted-foreground/70">
-          ComfyUI: {config.comfy_dir || "ComfyUI"}/models
+        <p class="text-[11px] text-muted-foreground/70 -mt-1 leading-relaxed">
+          If downloading from the application does not work (for example, huggingface.co is not available) - download the
+          files manually using direct links and place them in the specified paths. The application will pick them up
+          automatically.
         </p>
-        {#each MODELS as model}<div
-            class="space-y-1.5 border-t border-border pt-3"
-          >
-            <div class="flex justify-between text-xs">
-              <span class="font-medium">{model.label}</span><span
-                class="text-muted-foreground">{model.sizeLabel}</span
-              >
-            </div>
-            <p class="font-mono text-[10px] break-all text-muted-foreground">
-              {config.comfy_dir || "ComfyUI"}/models/{model.relPath}
-            </p>
-            <div class="flex gap-2">
-              <a
-                class={outline}
-                href={model.url}
-                target="_blank"
-                rel="noreferrer"><Download class="w-3.5 h-3.5" />Download</a
-              ><button
-                class={outline}
-                onclick={async () => {
-                  await navigator.clipboard.writeText(model.url);
-                  toast.success("Link copied");
-                }}>Copy link</button
-              ><button
-                class={outline}
-                onclick={async () => {
-                  await navigator.clipboard.writeText(
-                    `${config.comfy_dir || "ComfyUI"}/models/${model.relPath}`,
-                  );
-                  toast.success("Path copied");
-                }}>Copy path</button
-              >
-            </div>
-          </div>{/each}
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2 p-2 rounded-md bg-[var(--surface-2)] border border-border">
+            <FolderOpen class="w-4 h-4 text-amber-400 shrink-0" />
+            <code class="flex-1 min-w-0 text-[10px] font-mono text-foreground/80 break-all">ComfyUI: {comfyModelsRoot}</code>
+            <button
+              type="button"
+              onclick={() => void copyText(comfyModelsRoot, "Path")}
+              class="p-1 rounded hover:bg-[var(--surface-3)] text-muted-foreground hover:text-foreground shrink-0"
+              title="Copy path"><Copy class="w-3.5 h-3.5" /></button
+            >
+          </div>
+        </div>
+        {#each MODEL_CATEGORIES as category (category.key)}{@const models = MODELS.filter((m) => m.category === category.key)}{#if models.length}<div
+              class="space-y-1.5 pt-2 border-t border-border"
+            >
+              <div class="text-[11px] font-medium text-foreground/80">{category.label}</div>
+              {#each models as m (m.id)}{@const fullPath = comfyModelsRoot + m.relPath}<div
+                  class="p-2 rounded-md bg-[var(--surface-2)]/60 border border-border space-y-1"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-[11px] text-foreground/90 truncate" title={m.label}>{m.label}</span>
+                    <span
+                      class="inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 font-medium w-fit whitespace-nowrap bg-secondary text-secondary-foreground text-[9px] shrink-0"
+                      >{m.sizeLabel}</span
+                    >
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <code class="flex-1 min-w-0 text-[10px] font-mono text-cyan-300/80 truncate" title={fullPath}>{fullPath}</code>
+                    <button
+                      type="button"
+                      onclick={() => void copyText(fullPath, "Path")}
+                      class="p-0.5 rounded hover:bg-[var(--surface-3)] text-muted-foreground hover:text-foreground shrink-0"
+                      title="Copy full path"><Copy class="w-3 h-3" /></button
+                    >
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <a
+                      href={m.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      class="flex-1 min-w-0 text-[10px] text-muted-foreground hover:text-cyan-300 truncate underline decoration-dotted underline-offset-2"
+                      title={m.url}>{m.url.replace("?download=true", "")}</a
+                    >
+                    <button
+                      type="button"
+                      onclick={() => void copyText(m.url, "URL")}
+                      class="p-0.5 rounded hover:bg-[var(--surface-3)] text-muted-foreground hover:text-foreground shrink-0"
+                      title="Copy link"><Copy class="w-3 h-3" /></button
+                    >
+                  </div>
+                </div>{/each}
+            </div>{/if}{/each}
+        <p class="text-[10px] text-muted-foreground/60 leading-relaxed pt-1">
+          The file name must match exactly (the browser sometimes adds “(1)” - rename). If huggingface.co does not open,
+          replace the domain in the link with <code class="text-cyan-300/80">hf-mirror.com</code>. After downloading check
+          the file size (see badge) - a smaller size means the download is interrupted.
+        </p>
       </div>
     {:else if tab === "Reset"}<div class="space-y-4 py-2">
         <div class="flex items-center gap-2 text-sm font-medium text-red-400">

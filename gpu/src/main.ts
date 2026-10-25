@@ -4,6 +4,7 @@ import { cleanOutputs, cleanInputs } from "./workspace";
 import { uploadArtifact } from "./artifacts";
 import { execute, local, type Job } from "./handlers";
 import { delay, comfy, waitIdle, takeUploadedInputs } from "./comfy";
+import { systemStats } from "./stats";
 const root = resolve(process.env.PIPELINE_WORK_DIR || "/content/drama-runtime");
 const studio = (process.env.STUDIO_URL || "").replace(/\/+$/, "");
 const key = process.env.GPU_KEY || "";
@@ -58,6 +59,7 @@ async function main() {
         info: {
           model: process.env.COLAB_LLM_MODEL || "Qwen/Qwen3.6-27B",
           platform: "colab",
+          stats: await systemStats().catch(() => null),
         },
       });
       if (active)

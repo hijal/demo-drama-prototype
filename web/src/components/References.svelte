@@ -4,8 +4,6 @@
     AudioLines,
     Image,
     Video,
-    ChevronUp,
-    ChevronDown,
     X,
   } from "lucide-svelte";
   import {
@@ -32,7 +30,14 @@
     insertMention: (tag: string) => void;
   } = $props();
   let viewing = $state<VideoRefItem | null>(null),
-    viewOpen = $state(false);
+    viewOpen = $state(false),
+    dragOver = $state(false);
+  const zone = (over: boolean) =>
+    over
+      ? "border-cyan-400 bg-cyan-500/10"
+      : "border-border hover:border-cyan-500/50 hover:bg-[var(--surface-2)]";
+  const thumb = (path: string) =>
+    `/api/comfy/file?filename=${encodeURIComponent(path)}&type=input&width=200`;
   const visible = $derived(
     video.refs.filter((ref) => video.mode === "ref" || ref.kind === "audio"),
   );
@@ -114,10 +119,15 @@
       {#each ["start", "end"] as slot}{@const frame =
           slot === "start" ? video.startFrame : video.endFrame}
         <label
-          class="border-2 border-dashed rounded-lg py-3 text-center cursor-pointer transition-all border-border hover:border-cyan-500/50 hover:bg-[var(--surface-2)]"
-          ondragover={(e) => e.preventDefault()}
+          class="border-2 border-dashed rounded-lg py-3 text-center cursor-pointer transition-all {zone(dragOver)}"
+          ondragover={(e) => {
+            e.preventDefault();
+            dragOver = true;
+          }}
+          ondragleave={() => (dragOver = false)}
           ondrop={(e) => {
             e.preventDefault();
+            dragOver = false;
             void onupload(
               e.dataTransfer?.files || null,
               slot as "start" | "end",
@@ -175,13 +185,18 @@
       >
     </div>{/if}
   <label
-    class="block border-2 border-dashed rounded-lg text-center cursor-pointer transition-all border-border hover:border-cyan-500/50 hover:bg-[var(--surface-2)] {video.mode ===
+    class="block border-2 border-dashed rounded-lg text-center cursor-pointer transition-all {zone(dragOver)} {video.mode ===
     'ref'
       ? 'py-4'
       : 'py-3'}"
-    ondragover={(e) => e.preventDefault()}
+    ondragover={(e) => {
+      e.preventDefault();
+      dragOver = true;
+    }}
+    ondragleave={() => (dragOver = false)}
     ondrop={(e) => {
       e.preventDefault();
+      dragOver = false;
       void onupload(e.dataTransfer?.files || null);
     }}
   >
@@ -231,21 +246,23 @@
       <div class="flex items-start gap-2.5">
         <div class="flex flex-col gap-0.5 shrink-0">
           <button
-            class="w-5 h-5 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-[var(--surface-3)] disabled:opacity-30"
+            class="w-5 h-5 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-[var(--surface-3)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Higher"
             aria-label={`Move ${ref.name} earlier`}
             disabled={index === 0}
             onclick={() =>
               editRefs(() =>
                 useGenStore.getState().moveVideoRef(index, index - 1),
-              )}><ChevronUp class="w-3.5 h-3.5" /></button
+              )}><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 6L5 3L8 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button
           ><button
-            class="w-5 h-5 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-[var(--surface-3)] disabled:opacity-30"
+            class="w-5 h-5 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-[var(--surface-3)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Below"
             aria-label={`Move ${ref.name} later`}
             disabled={index === video.refs.length - 1}
             onclick={() =>
               editRefs(() =>
                 useGenStore.getState().moveVideoRef(index, index + 1),
-              )}><ChevronDown class="w-3.5 h-3.5" /></button
+              )}><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4L5 7L8 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button
           >
         </div>
         <button
@@ -253,17 +270,28 @@
             viewing = ref;
             viewOpen = true;
           }}
-          class="w-14 h-14 rounded-md overflow-hidden bg-black/40 border border-border shrink-0 flex items-center justify-center hover:border-cyan-500/60"
+          type="button"
+          disabled={!ref.path}
+          title="Open reference"
+          class="w-14 h-14 rounded-md overflow-hidden bg-black/40 border border-border shrink-0 flex items-center justify-center hover:border-cyan-500/60 transition-colors disabled:cursor-not-allowed"
           aria-label={`Preview ${ref.name}`}
-          >{#if ref.kind === "image"}<img
-              src={ref.previewUrl || inputUrl(ref.path)}
+          >{#if ref.kind === "image" && ref.path}<img
+              src={thumb(ref.path)}
               alt={ref.name}
               class="w-full h-full object-cover"
-            />{:else if ref.kind === "video"}<Video
-              class="w-5 h-5 text-muted-foreground"
-            />{:else}<AudioLines
+            />{/if}{#if ref.kind === "video" && ref.path}<video
+              src={inputUrl(ref.path)}
+              muted
+              playsinline
+              class="w-full h-full object-cover"
+              preload="metadata"
+            ></video>{/if}{#if ref.kind === "audio"}<AudioLines
               class="w-5 h-5 text-emerald-400"
-            />{/if}</button
+            />{/if}{#if !ref.path}{#if ref.kind === "image"}<Image
+                class="w-5 h-5 text-muted-foreground"
+              />{:else if ref.kind === "video"}<Video
+                class="w-5 h-5 text-muted-foreground"
+              />{/if}{/if}</button
         >
         <div class="flex-1 min-w-0 space-y-1">
           <div class="flex items-center gap-1.5">
@@ -284,10 +312,11 @@
                   : "Audio"} → {tagFor(ref)}</button
             >
           </div>
-          <p class="text-[11px] text-foreground/80 truncate">{ref.name}</p>
+          <p class="text-[11px] text-foreground/80 truncate" title={ref.name}>{ref.name}</p>
         </div>
         <button
-          class="p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-400 shrink-0"
+          class="p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-400 transition-colors shrink-0"
+          title="Remove reference"
           aria-label={`Remove ${ref.name}`}
           onclick={() =>
             editRefs(() => useGenStore.getState().removeVideoRef(ref.id))}
@@ -307,7 +336,7 @@
                 })}
             />use video sound</label
           >{:else if ref.kind === "audio"}<select
-            class="text-[11px] bg-[var(--surface-0)] border border-border rounded-md h-7"
+            class="flex-1 h-7 px-2 bg-[var(--surface-0)] border border-border rounded-md text-[11px] text-foreground focus:outline-none focus:border-cyan-500/50"
             aria-label={`Intent for ${ref.name}`}
             value={ref.audioIntent}
             onchange={(e) =>
@@ -325,22 +354,31 @@
   {#if video.mode === "ref"}<p
       class="text-[10px] text-muted-foreground/60 leading-relaxed"
     >
-      To link a reference, enter @ in the prompt - a list will appear. Turn the
-      dialogue into &lt;d&gt;…&lt;/d&gt;.
+      To link a reference, enter <span class="font-mono text-foreground/70">@</span> in the prompt - a list will appear.
+      Turn the dialogue into <span class="font-mono text-muted-foreground">&lt;d&gt;…&lt;/d&gt;</span>.
     </p>{/if}
 </div>
-<Modal bind:open={viewOpen} title={viewing?.name || "Reference"} wide
-  >{#if viewing}{#if viewing.kind === "image"}<img
-        class="max-w-full max-h-[70vh] mx-auto object-contain"
-        src={viewing.previewUrl || inputUrl(viewing.path)}
-        alt={viewing.name}
-      />{:else if viewing.kind === "video"}<video
-        class="max-w-full max-h-[70vh] mx-auto"
-        src={viewing.previewUrl || inputUrl(viewing.path)}
-        controls><track kind="captions" /></video
-      >{:else}<audio
-        class="w-full"
-        src={viewing.previewUrl || inputUrl(viewing.path)}
-        controls
-      ></audio>{/if}{/if}</Modal
+<Modal bind:open={viewOpen} title={viewing?.name || "Reference"} kind="reference"
+  >{#snippet icon()}{#if viewing?.kind === "image"}<Image class="w-4 h-4 text-purple-400" />{:else if viewing?.kind === "video"}<Video
+        class="w-4 h-4 text-cyan-400"
+      />{:else}<AudioLines class="w-4 h-4 text-emerald-400" />{/if}{/snippet}{#if viewing}<div
+      class="px-4 pb-4 flex items-center justify-center bg-black/40 rounded-b-lg min-h-[300px] max-h-[80vh] overflow-auto"
+    >
+      {#if viewing.kind === "image"}<img
+          src={inputUrl(viewing.path)}
+          alt={viewing.name}
+          class="max-w-full max-h-[76vh] object-contain rounded"
+          draggable="false"
+        />{:else if viewing.kind === "video"}<video
+          src={inputUrl(viewing.path)}
+          controls
+          autoplay
+          loop
+          playsinline
+          class="max-w-full max-h-[76vh] rounded"><track kind="captions" /></video
+        >{:else}<div class="w-full flex flex-col items-center gap-6 py-16">
+          <AudioLines class="w-20 h-20 text-emerald-400/60" />
+          <audio src={inputUrl(viewing.path)} controls autoplay class="w-full max-w-2xl"></audio>
+        </div>{/if}
+    </div>{/if}</Modal
 >

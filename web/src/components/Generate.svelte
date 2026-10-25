@@ -1,23 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Modal from "./Modal.svelte";
-  import PromptHighlight from "./PromptHighlight.svelte";
+  import MentionTextarea, { type MentionItem } from "./MentionTextarea.svelte";
   import PromptEditor from "./PromptEditor.svelte";
   import PromptQuality from "./PromptQuality.svelte";
   import Select from "./Select.svelte";
   import SettingSlider from "./SettingSlider.svelte";
   import References from "./References.svelte";
+  import GenerationStatus from "./GenerationStatus.svelte";
   import {
     Sparkles,
     History,
-    Pencil,
+    PencilLine,
     SlidersHorizontal,
     ChevronDown,
     Dices,
     Folder,
     Film,
     Star,
-    Trash2,
+    X,
   } from "lucide-svelte";
   import Gallery from "./Gallery.svelte";
   import { readable } from "../lib/store";
@@ -69,12 +70,6 @@
   let uploading = $state(false);
   let editor = $state(false);
   let showHistory = $state(false);
-  let historyPosition = $state({ left: 0, top: 0 });
-  let examplesPosition = $state({ left: 0, top: 0 });
-  let promptElement = $state<HTMLTextAreaElement>();
-  let mention = $state(false);
-  let preview = $state("");
-  let stage = $state("");
   const presets = $derived(buildPresets(options, true));
   const minFrames = $derived(options?.frames_minimum ?? 60);
   const maxFrames = $derived(options?.frames_maximum ?? 719);
@@ -118,75 +113,38 @@
       .catch(() => {});
     return () => (disposed = true);
   });
-  $effect(() => {
-    const pid = generation.promptId;
-    const phase = generation.phase;
-    preview = "";
-    stage = "";
-    if (!pid || !["queued", "running"].includes(phase)) return;
-    let disposed = false,
-      busy = false;
-    async function poll() {
-      if (busy) return;
-      busy = true;
-      try {
-        const data = await api(
-          `/api/comfy/preview?prompt_id=${encodeURIComponent(pid!)}`,
-        );
-        if (!disposed) {
-          preview = data.preview?.image || "";
-          stage =
-            data.stage?.label ||
-            (data.preview
-              ? `Step ${data.preview.step} / ${data.preview.total}`
-              : "");
-        }
-      } catch {
-      } finally {
-        busy = false;
-      }
-    }
-    void poll();
-    const timer = setInterval(poll, 2000);
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-    };
+  let mentionBox = $state<ReturnType<typeof MentionTextarea>>();
+  /* Trigger numbering runs separately per reference type (Picture N / Video N / Audio N). */
+  const mentions = $derived.by((): MentionItem[] => {
+    const counters = { image: 0, video: 0, audio: 0 };
+    return v.refs.map((ref) => {
+      const tag = ref.kind === "image" ? "Picture" : ref.kind === "video" ? "Video" : "Audio";
+      counters[ref.kind] += 1;
+      return {
+        id: ref.id,
+        label: ref.name,
+        trigger: `<${tag} ${counters[ref.kind]}>`,
+        kind: ref.kind,
+        color:
+          ref.kind === "image"
+            ? "bg-purple-500/15 text-purple-400"
+            : ref.kind === "video"
+              ? "bg-cyan-500/15 text-cyan-400"
+              : "bg-emerald-500/15 text-emerald-400",
+        previewUrl: ref.previewUrl || (ref.path ? inputUrl(ref.path) : undefined),
+      };
+    });
   });
   function changePrompt(text: string) {
     useGenStore.getState().setVideoPrompt(text);
   }
-  function insert(text: string) {
-    const start = promptElement?.selectionStart ?? v.prompt.length,
-      end = promptElement?.selectionEnd ?? start;
-    changePrompt(v.prompt.slice(0, start) + text + v.prompt.slice(end));
-    mention = false;
-    requestAnimationFrame(() => {
-      promptElement?.focus();
-      promptElement?.setSelectionRange(
-        start + text.length,
-        start + text.length,
-      );
-    });
-  }
+  /* References' tag chips insert at the prompt caret, like the Next.js mention box. */
   function insertMention(text: string) {
-    const cursor = promptElement?.selectionStart ?? v.prompt.length;
-    const before = v.prompt.slice(0, cursor),
-      at = before.lastIndexOf("@");
-    if (mention && at >= 0)
-      changePrompt(before.slice(0, at) + text + " " + v.prompt.slice(cursor));
-    else insert(text + " ");
-    mention = false;
+    mentionBox?.insertAtCursor(text);
   }
   const tagFor = (ref: VideoRefItem) =>
     `<${{ image: "Picture", video: "Video", audio: "Audio" }[ref.kind]} ${v.refs.filter((r) => r.kind === ref.kind).findIndex((r) => r.id === ref.id) + 1}>`;
-  function dialogue() {
-    const start = promptElement?.selectionStart ?? v.prompt.length,
-      end = promptElement?.selectionEnd ?? start;
-    insert(
-      `<d>${v.prompt.slice(start, end) || "[English] Dialogue here."}</d>`,
-    );
-  }
+
   async function upload(
     files: FileList | File[] | null,
     slot?: "start" | "end",
@@ -341,6 +299,52 @@
   const aspects = $derived(
     Object.keys(presets[resolution.quality] || presets[qualities[0]] || {}),
   );
+  /* Sampler/scheduler labels for both passes (same order as VALID_KSAMPLERS / PASS1_SCHEDULERS). */
+  const SAMPLER_OPTIONS = [
+    { value: "euler", label: "euler (default, classic)" },
+    { value: "er_sde", label: "er_sde (SDE)" },
+    { value: "dpmpp_2m", label: "dpmpp_2m (multistep)" },
+    { value: "dpmpp_3m_sde", label: "dpmpp_3m_sde (high quality)" },
+    { value: "heun", label: "heun (2nd order)" },
+    { value: "lcm", label: "lcm (few steps)" },
+    { value: "res_multistep", label: "res_multistep (residual)" },
+  ];
+  const SCHEDULER_OPTIONS = [
+    { value: "simple", label: "simple (default)" },
+    ...["sgm_uniform", "karras", "exponential", "ddim_uniform", "normal", "beta", "linear_quadratic", "kl_optimal"].map((value) => ({ value, label: value })),
+  ];
+  const SIGMA_OPTIONS = [
+    { value: "3step", label: "3 steps (faster)" },
+    { value: "4step", label: "4 steps (balance)" },
+    { value: "5step", label: "5 steps (high)" },
+    { value: "6step", label: "6 steps (very high)" },
+    { value: "7step", label: "7 steps (max)" },
+  ];
+  const freeDims = $derived(computeOutputDimensions(resolution.aspect, v.finalResolution > 0 ? v.finalResolution : 0.7));
+  /* Pass 1 cannot be greater than the final resolution. */
+  const maxLowRes = $derived(Math.min(0.5, v.finalResolution > 0 ? v.finalResolution : 0.7));
+  const BADGE =
+    "inline-flex items-center justify-center rounded-md border px-2 py-0.5 font-medium w-fit whitespace-nowrap shrink-0 gap-1 overflow-hidden";
+  const BADGE_SECONDARY = "border-transparent bg-secondary text-secondary-foreground";
+  let historyAnchor = $state<HTMLElement>(),
+    examplesAnchor = $state<HTMLElement>();
+  /** Position a dropdown under its anchor button (clamped to viewport). */
+  function dropdownPos(anchor: HTMLElement) {
+    const r = anchor.getBoundingClientRect();
+    const width = 340;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    const top = Math.min(r.bottom + 6, window.innerHeight - 80);
+    return `top:${top}px;left:${left}px;width:${width}px`;
+  }
+  function applyExample(text: string) {
+    const old = v.prompt;
+    changePrompt(text);
+    examples = false;
+    if (old.trim())
+      toast.success("Example inserted (previous prompt replaced)", {
+        action: { label: "Cancel", onClick: () => changePrompt(old) },
+      });
+  }
   function setQuality(quality: string) {
     useGenStore
       .getState()
@@ -391,10 +395,6 @@
       showHistory = false;
       examples = false;
       folderMenu = false;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      e.preventDefault();
-      void generate();
     }
   }}
   onpaste={(e) => {
@@ -490,17 +490,32 @@
                 class="ml-auto text-[10px] font-mono text-cyan-300/90"
                 >{(v.finalResolution || 0.7).toFixed(2)} MP ({dimensions})</span
               >{/if}</button
-          >{#if v.freeResolution}<SettingSlider
-              label="Resolution (MP)"
-              value={v.finalResolution || 0.7}
-              min={0.2}
-              max={3}
-              step={0.05}
-              inputMax={16}
-              onchange={(n) =>
-                patch({ finalResolution: n, targetDimensions: null })}
-              hint={`Free size. Final Resolution ${dimensions} with the ratio ${resolution.aspect}. manual input: up to 16 MP`}
-            />{/if}{/if}
+          >{#if v.freeResolution}<div class="overflow-hidden">
+              <div class="space-y-1 px-1">
+                <SettingSlider
+                  label="Resolution (MP)"
+                  value={v.finalResolution > 0 ? v.finalResolution : 0.7}
+                  onchange={(n) =>
+                    patch({ finalResolution: Math.round(n * 100) / 100, targetDimensions: null })}
+                  min={0.2}
+                  max={3.0}
+                  step={0.05}
+                  formatValue={(n) => {
+                    const d = computeOutputDimensions(resolution.aspect, n);
+                    return `${n.toFixed(2)} MP (${d.w}×${d.h})`;
+                  }}
+                  inputMin={0.2}
+                  inputMax={16}
+                  inputHint="0.2–16 MP. Above 3 MP - noticeably more VRAM and rendering time"
+                />
+                <p class="text-[10px] text-muted-foreground/60">
+                  Free size. Final Resolution {freeDims.w}×{freeDims.h} with the ratio {resolution.aspect}.
+                  <span title="Manual input allows you to go beyond the slider range (0.2–3 MP) - up to 16 MP"
+                    >manual input: up to 16 MP</span
+                  >
+                </p>
+              </div>
+            </div>{/if}{/if}
       </div>
       <div class="space-y-1.5">
         <div
@@ -512,11 +527,25 @@
               class="h-6 w-16 rounded-md border border-border bg-[var(--surface-2)] px-1.5 text-right font-mono text-xs tabular-nums text-foreground/80 focus:border-cyan-500/60 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
               type="text"
               inputmode="numeric"
-              aria-label="Duration frames"
+              aria-label={`Duration: manual input (${minFrames}–${maxFrames} frames)`}
+              title={`Frames: ${minFrames}–${maxFrames} (grid 17n+5, 24 fps)`}
               value={v.videoLength}
+              onfocus={(e) => {
+                const el = e.currentTarget;
+                requestAnimationFrame(() => el.select());
+              }}
+              onkeydown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  length(e.currentTarget.value);
+                } else if (e.key === "Escape") {
+                  e.currentTarget.value = String(v.videoLength);
+                  e.currentTarget.blur();
+                }
+              }}
               onchange={(e) => length(e.currentTarget.value)}
             /><span
-              class="inline-flex items-center justify-center rounded-md bg-secondary px-2 py-0.5 text-xs font-medium"
+              class="inline-flex items-center justify-center rounded-md border border-transparent bg-secondary text-secondary-foreground px-2 py-0.5 text-xs font-medium"
               >{(v.videoLength / 24).toFixed(1)} s</span
             ></span
           >
@@ -532,10 +561,12 @@
           oninput={(e) => length(e.currentTarget.value)}
         />
         <p class="text-[10px] text-muted-foreground/60">
-          24 fps · from {(minFrames / 24).toFixed(1)} up to {(
-            maxFrames / 24
-          ).toFixed(1)} s · alignment 17n+5 · maximum 30 s · manual input: {minFrames}–{maxFrames}
-          frames.
+          24 fps · from {(minFrames / 24).toFixed(1)} up to {(maxFrames / 24).toFixed(1)} s · alignment 17n+5 · maximum 30 s
+          ·
+          <span
+            title="A value outside 17n+5 is rounded to the nearest valid point, outside the model boundaries - to the boundary"
+            >manual input: {minFrames}–{maxFrames} frame.</span
+          >
         </p>
       </div>
       <div class="h-px w-full shrink-0 bg-border opacity-50"></div>
@@ -546,8 +577,10 @@
         {tagFor}
         {insertMention}
       />
-      <div class="space-y-3">
+      <div class="h-px w-full shrink-0 bg-border opacity-50"></div>
+      <div class="space-y-2">
         <button
+          type="button"
           class="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--surface-2)] border border-border hover:border-cyan-500/30 transition-all text-left"
           onclick={() => (advanced = !advanced)}
           aria-expanded={advanced}
@@ -561,9 +594,10 @@
         {#if advanced}<div class="space-y-3 pl-1 overflow-hidden">
             <div class="space-y-2">
               <div
-                class="text-xs text-muted-foreground flex items-center justify-between"
+                class="flex items-center gap-2 leading-none font-medium select-none text-xs text-muted-foreground justify-between"
               >
                 <label for="seed">Seed</label><button
+                  class="p-1 rounded hover:bg-[var(--surface-3)] transition-colors"
                   title="Random seed (-1)"
                   onclick={() => patch({ seed: -1 })}
                   ><Dices class="w-4 h-4 text-muted-foreground" /></button
@@ -573,101 +607,135 @@
                 id="seed"
                 aria-label="Seed"
                 type="number"
-                class="w-full h-9 rounded-md border border-border bg-[var(--surface-2)] px-3 text-sm font-mono"
+                class="placeholder:text-muted-foreground border-input flex w-full min-w-0 rounded-md border px-3 py-1 shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] h-9 bg-[var(--surface-2)] border-border text-sm font-mono"
                 value={v.seed}
-                onchange={(e) => {
-                  const n = Number(e.currentTarget.value);
-                  if (Number.isFinite(n)) patch({ seed: Math.round(n) });
+                oninput={(e) => {
+                  const n = e.currentTarget.valueAsNumber;
+                  const MAX_SEED = 2 ** 31 - 1;
+                  if (!Number.isFinite(n)) {
+                    patch({ seed: -1 });
+                    return;
+                  }
+                  patch({ seed: n < 0 ? -1 : Math.min(Math.trunc(n), MAX_SEED) });
                 }}
               />
-              <p class="text-[10px] text-muted-foreground/60">-1 = random</p>
             </div>
             <div class="space-y-1.5">
               <button
-                class="w-full flex items-center justify-between px-3 py-1.5 rounded-md bg-[var(--surface-3)] border border-border/60 hover:border-cyan-500/30 text-left"
+                type="button"
+                class="w-full flex items-center justify-between px-3 py-1.5 rounded-md bg-[var(--surface-3)] border border-border/60 hover:border-cyan-500/30 transition-all text-left"
                 onclick={() => (pass1 = !pass1)}
                 ><span class="text-[11px] font-medium text-muted-foreground"
                   >Pass 1 — Low-res</span
                 ><span
-                  class="text-[9px] text-muted-foreground"
+                  class="text-[9px] text-muted-foreground transition-transform"
                   class:rotate-180={pass1}>▼</span
                 ></button
               >{#if pass1}<div class="space-y-3 pl-1 overflow-hidden">
-                  <SettingSlider
-                    label="Low-res resolution (MP)"
-                    value={v.lowResMP}
-                    min={0.2}
-                    max={Math.min(0.5, v.finalResolution || 0.7)}
-                    inputMin={0.1}
-                    inputMax={Math.min(0.5, v.finalResolution || 0.7)}
-                    step={0.05}
-                    onchange={(n) => patch({ lowResMP: n })}
-                    hint="First pass permission. The lower, the faster."
-                  /><SettingSlider
-                    label="Sampler steps"
-                    value={v.firstSamplerSteps}
-                    min={2}
-                    max={30}
-                    inputMin={1}
-                    inputMax={128}
-                    onchange={(n) => patch({ firstSamplerSteps: n })}
-                  />{#each [{ key: "pass1Sampler", label: "Sampler", values: [...VALID_KSAMPLERS] }, { key: "pass1Scheduler", label: "Scheduler", values: [...PASS1_SCHEDULERS] }] as control}<label
-                      class="block space-y-1"
-                      ><span class="text-xs text-muted-foreground"
-                        >{control.label}</span
-                      ><Select
-                        label={`Pass 1 ${control.label.toLowerCase()}`}
-                        value={v[control.key as keyof VideoGenState] as string}
-                        options={control.values}
-                        onchange={(value) => patch({ [control.key]: value })}
-                      /></label
-                    >{/each}
                   <div class="space-y-1">
-                    <span class="text-xs text-muted-foreground"
-                      >Refs: size mode</span
-                    >
+                    <SettingSlider
+                      label="Low-res resolution (MP)"
+                      value={typeof v.lowResMP === "number" ? Math.min(v.lowResMP, maxLowRes) : 0.2}
+                      onchange={(n) => patch({ lowResMP: Math.min(maxLowRes, Math.round(n * 100) / 100) })}
+                      min={0.2}
+                      max={maxLowRes}
+                      step={0.05}
+                      inputMin={0.1}
+                      inputMax={maxLowRes}
+                      inputHint={`0.1–${maxLowRes.toFixed(2)} MP. Pass 1 - draft, no more than final resolution`}
+                    />
+                    <p class="text-[10px] text-muted-foreground/60">
+                      First pass permission. The lower, the faster.
+                      <span title="Pass 1 cannot be greater than the final resolution"
+                        >max: {maxLowRes.toFixed(2)} MP</span
+                      >
+                    </p>
+                  </div>
+                  <div class="space-y-1">
+                    <SettingSlider
+                      label="Sampler steps"
+                      value={v.firstSamplerSteps ?? 4}
+                      onchange={(n) => patch({ firstSamplerSteps: Math.round(n) })}
+                      min={2}
+                      max={30}
+                      step={1}
+                      inputMin={1}
+                      inputMax={128}
+                      inputHint="1–128 steps. Above 30 - generation is noticeably longer"
+                    />
+                    <p class="text-[10px] text-muted-foreground/60">
+                      Number of steps (2–30). More = more accurate, but slower.
+                      <span title="Manual input allows you to go beyond the slider range (2–30) - up to 128 steps"
+                        >manual input: 1–128</span
+                      >
+                    </p>
+                  </div>
+                  <div class="space-y-1">
+                    <span class="flex items-center gap-2 leading-none font-medium select-none text-xs text-muted-foreground">Sampler</span>
+                    <Select
+                      label="Pass 1 sampler"
+                      value={v.pass1Sampler || "euler"}
+                      options={SAMPLER_OPTIONS}
+                      onchange={(value) => patch({ pass1Sampler: value })}
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <span class="flex items-center gap-2 leading-none font-medium select-none text-xs text-muted-foreground">Scheduler</span>
+                    <Select
+                      label="Pass 1 scheduler"
+                      value={v.pass1Scheduler || "simple"}
+                      options={SCHEDULER_OPTIONS}
+                      onchange={(value) => patch({ pass1Scheduler: value })}
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <span class="flex items-center gap-2 leading-none font-medium select-none text-xs text-muted-foreground">Refs: size mode</span>
                     <div class="grid grid-cols-2 gap-1.5">
-                      {#each ["match", "max"] as mode}<button
-                          class="px-2 py-1.5 rounded-md border text-[11px] {v.referenceDetail ===
-                          mode
+                      {#each [{ id: "match", label: "Match (quick)" }, { id: "max", label: "Max (quality)" }] as mode}<button
+                          type="button"
+                          class="px-2 py-1.5 rounded-md border text-[11px] transition-colors {(v.referenceDetail || 'match') === mode.id
                             ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10'
-                            : 'border-border text-muted-foreground'}"
-                          onclick={() =>
-                            patch({ referenceDetail: mode as "match" | "max" })}
-                          >{mode === "match"
-                            ? "Match (quick)"
-                            : "Max (quality)"}</button
+                            : 'border-border text-muted-foreground hover:text-foreground'}"
+                          onclick={() => patch({ referenceDetail: mode.id as "match" | "max" })}
+                          >{mode.label}</button
                         >{/each}
                     </div>
                     <p class="text-[10px] text-muted-foreground/60">
-                      Match: refs for generation area (fast). Max: short sides
-                      2048px (precision, slower).
+                      Match: refs for generation area (fast). Max: short sides 2048px (precision, slower).
                     </p>
                   </div>
                 </div>{/if}
             </div>
             <div class="space-y-1.5">
               <button
-                class="w-full flex items-center justify-between px-3 py-1.5 rounded-md bg-[var(--surface-3)] border border-border/60 hover:border-cyan-500/30 text-left"
+                type="button"
+                class="w-full flex items-center justify-between px-3 py-1.5 rounded-md bg-[var(--surface-3)] border border-border/60 hover:border-cyan-500/30 transition-all text-left"
                 onclick={() => (pass2 = !pass2)}
                 ><span class="text-[11px] font-medium text-muted-foreground"
                   >Pass 2 — High-res</span
                 ><span
-                  class="text-[9px] text-muted-foreground"
+                  class="text-[9px] text-muted-foreground transition-transform"
                   class:rotate-180={pass2}>▼</span
                 ></button
               >{#if pass2}<div class="space-y-3 pl-1 overflow-hidden">
-                  {#each [{ key: "sigmaVariant", label: "Sigma profile (steps)", values: ["3step", "4step", "5step", "6step", "7step"] }, { key: "pass2Sampler", label: "Sampler", values: [...VALID_KSAMPLERS] }] as control}<label
-                      class="block space-y-1"
-                      ><span class="text-xs text-muted-foreground"
-                        >{control.label}</span
-                      ><Select
-                        label={`Pass 2 ${control.label.toLowerCase()}`}
-                        value={v[control.key as keyof VideoGenState] as string}
-                        options={control.values}
-                        onchange={(value) => patch({ [control.key]: value })}
-                      /></label
-                    >{/each}
+                  <div class="space-y-1">
+                    <span class="flex items-center gap-2 leading-none font-medium select-none text-xs text-muted-foreground">Sigma profile (steps)</span>
+                    <Select
+                      label="Pass 2 sigma profile"
+                      value={v.sigmaVariant || "3step"}
+                      options={SIGMA_OPTIONS}
+                      onchange={(value) => patch({ sigmaVariant: value })}
+                    />
+                  </div>
+                  <div class="space-y-1">
+                    <span class="flex items-center gap-2 leading-none font-medium select-none text-xs text-muted-foreground">Sampler</span>
+                    <Select
+                      label="Pass 2 sampler"
+                      value={v.pass2Sampler || "euler"}
+                      options={SAMPLER_OPTIONS}
+                      onchange={(value) => patch({ pass2Sampler: value })}
+                    />
+                  </div>
                 </div>{/if}
             </div>
           </div>{/if}
@@ -676,52 +744,19 @@
     <div
       class="shrink-0 border-t border-border p-3 bg-[var(--surface-0)]/90 backdrop-blur-sm"
     >
-      <div class="space-y-2">
-        <div class="flex items-center justify-between gap-2 text-xs">
-          <span
-            class="font-medium shrink-0 {active
-              ? 'text-cyan-400'
-              : generation.phase === 'error'
-                ? 'text-red-400'
-                : 'text-muted-foreground'}"
-            >{generation.phase === "idle"
-              ? "Ready to generate"
-              : generation.phase === "done"
-                ? "Done ✓"
-                : generation.phase === "error"
-                  ? "Error"
-                  : generation.phase === "queued"
-                    ? "Queued…"
-                    : generation.phase === "submitting"
-                      ? "Submitting…"
-                      : "Generating…"}</span
-          >{#if stage}<span
-              class="text-muted-foreground/60 truncate max-w-[140px]"
-              >{stage}</span
-            >{/if}
-        </div>
-        <div class="h-2 bg-[var(--surface-2)] rounded-full overflow-hidden">
-          {#if active}<div
-              class="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
-              style:width={`${generation.progressMax ? (generation.progressValue / generation.progressMax) * 100 : 33}%`}
-            ></div>{:else if generation.phase === "done"}<div
-              class="h-full bg-gradient-to-r from-green-500/60 to-emerald-500/60"
-            ></div>{/if}
-        </div>
-        {#if active}{#if preview}<img
-              class="w-full rounded-md"
-              src={preview}
-              alt="Live generation preview"
-            />{/if}<button
-            class="w-full text-xs text-red-400/70 hover:text-red-400 py-1"
-            aria-label="Cancel all"
-            onclick={() => controller?.interrupt()}>Stop</button
-          >{/if}{#if generation.error}<p
-            class="text-xs text-red-300/70 p-3 bg-red-500/10 border border-red-500/20 rounded-lg"
-          >
-            {generation.error}
-          </p>{/if}
-      </div>
+      <GenerationStatus
+        phase={generation.phase}
+        isGenerating={active}
+        progressPercent={generation.progressMax > 0
+          ? Math.round((generation.progressValue / generation.progressMax) * 100)
+          : 0}
+        statusMessage={generation.statusMessage}
+        error={generation.error}
+        oninterrupt={() => controller?.interrupt()}
+        onreset={() => controller?.reset()}
+        startedAt={generation.startedAt}
+        promptId={generation.promptId}
+      />
     </div>
   </div>
   <div class="flex-1 flex flex-col min-w-0 bg-[var(--surface-1)]">
@@ -747,144 +782,128 @@
           >
         </div>
         <div class="relative">
-          <PromptHighlight
-            text={v.prompt}
-            element={promptElement}
-            height={200}
-          />
-          <textarea
-            id="prompt"
-            aria-label="Prompt"
-            bind:this={promptElement}
-            class="relative w-full h-[200px] resize-none rounded-lg border border-border bg-transparent text-transparent caret-cyan-300 px-3 py-2 text-sm leading-relaxed font-mono placeholder:text-muted-foreground/50 focus:outline-none focus:border-cyan-500/40"
+          <MentionTextarea
+            bind:this={mentionBox}
             value={v.prompt}
+            onchange={changePrompt}
+            onkeydown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && v.prompt.trim()) {
+                e.preventDefault();
+                void generate();
+              }
+            }}
             placeholder="A girl with <Picture 1> walks through the market from <Video 1> and says: <d>Almost there.</d> …"
-            oninput={(e) => {
-              changePrompt(e.currentTarget.value);
-              mention = /@\w*$/.test(
-                e.currentTarget.value.slice(0, e.currentTarget.selectionStart),
-              );
-            }}></textarea><button
-            class="absolute top-2 right-2 w-7 h-7 rounded-lg border border-border/60 bg-[var(--surface-3)] flex items-center justify-center text-muted-foreground hover:text-foreground"
-            aria-label="Expand prompt editor"
+            {mentions}
+            class="h-[220px]"
+          />
+          <button
             onclick={() => (editor = true)}
-            ><Pencil class="w-3.5 h-3.5" /></button
+            class="absolute top-2 right-2 p-1.5 rounded-md bg-[var(--surface-3)] hover:bg-[var(--surface-4)] text-muted-foreground hover:text-foreground transition-colors border border-border/50 z-10"
+            title="Open prompt editor"
+            aria-label="Expand prompt editor"
+            ><PencilLine class="w-3.5 h-3.5" /></button
           >
-          {#if mention}<div
-              class="absolute top-full left-0 z-40 border border-border rounded-lg bg-[var(--surface-3)] shadow-lg p-1"
-            >
-              {#each v.refs.filter((r) => v.mode === "ref" || r.kind === "audio") as ref}<button
-                  class="block w-full px-3 py-2 text-xs text-left hover:bg-[var(--surface-4)]"
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => insertMention(tagFor(ref))}
-                  >{tagFor(ref)} · {ref.name}</button
-                >{/each}
-            </div>{/if}
         </div>
-        <PromptQuality
-          prompt={v.prompt}
-          refs={v.refs.filter((r) => v.mode === "ref" || r.kind === "audio")}
-        />
+        <PromptQuality prompt={v.prompt} refsCount={v.refs.length} />
         <div class="flex items-center gap-1.5">
           <button
-            class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border border-border text-muted-foreground hover:text-foreground"
+            type="button"
             onclick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              historyPosition = {
-                left: Math.min(rect.left, innerWidth - 344),
-                top: rect.bottom + 4,
-              };
+              historyAnchor = e.currentTarget;
               showHistory = !showHistory;
               examples = false;
             }}
-            ><History
-              class="w-3 h-3"
-            />History{#if $history.entries.length}<span
-                class="ml-0.5 px-1 rounded-full bg-[var(--surface-3)] text-[9px]"
-                >{$history.entries.length}</span
-              >{/if}</button
+            class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border transition-colors {showHistory
+              ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10'
+              : 'border-border text-muted-foreground hover:text-foreground'}"
           >
-          <div class="relative">
-            <button
-              class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border border-border text-muted-foreground hover:text-foreground"
-              onclick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                examplesPosition = {
-                  left: Math.min(rect.left, innerWidth - 344),
-                  top: rect.bottom + 4,
-                };
-                examples = !examples;
-                showHistory = false;
-              }}><Sparkles class="w-3 h-3" />Examples</button
-            >{#if examples}<div
-                style:left={`${examplesPosition.left}px`}
-                style:top={`${examplesPosition.top}px`}
-                class="fixed z-50 w-[340px] max-h-80 overflow-y-auto rounded-lg border border-border bg-[var(--surface-3)] shadow-2xl shadow-black/60"
-              >
-                {#each EXAMPLES as example}<button
-                    class="w-full text-left px-2.5 py-2 hover:bg-white/5"
-                    onclick={() => {
-                      changePrompt(example.text);
-                      examples = false;
-                    }}
-                    ><span class="text-xs font-medium">{example.title}</span>
-                    <p
-                      class="text-[10px] text-muted-foreground line-clamp-2 mt-1"
-                    >
-                      {example.text}
-                    </p></button
-                  >{/each}
-              </div>{/if}
-          </div>
+            <History class="w-3 h-3" />
+            History
+            {#if $history.entries.length > 0}<span
+                class="ml-0.5 px-1 rounded-full bg-[var(--surface-3)] text-[9px] text-muted-foreground"
+                >{$history.entries.length}</span
+              >{/if}
+          </button>
+          <button
+            type="button"
+            onclick={(e) => {
+              examplesAnchor = e.currentTarget;
+              examples = !examples;
+              showHistory = false;
+            }}
+            class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] border transition-colors {examples
+              ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10'
+              : 'border-border text-muted-foreground hover:text-foreground'}"
+          >
+            <Sparkles class="w-3 h-3" />
+            Examples
+          </button>
         </div>
       </div>
       <div class="flex items-center gap-3">
         <div class="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
-          <span
-            class="rounded-md px-2 py-0.5 bg-secondary text-secondary-foreground text-[10px] font-medium"
-            >{dimensions.replaceAll(" ", "").replace("×", "x")}</span
-          ><span
-            class="rounded-md px-2 py-0.5 bg-secondary text-secondary-foreground text-[10px] font-medium"
-            >{(v.videoLength / 24).toFixed(1)} s · 24 fps</span
-          ><span
-            class="rounded-md border px-2 py-0.5 bg-amber-500/15 text-amber-400 border-amber-500/30 text-[10px] font-medium"
-            >2-Pass · {v.freeResolution
-              ? `${v.finalResolution.toFixed(2)} MP`
-              : "auto MP"}</span
-          >{#if v.refs.length}<span
-              class="rounded-md px-2 py-0.5 bg-secondary text-[10px]"
-              >{v.refs.length} reference(s)</span
-            >{/if}
+          {#if v.freeResolution}<span class="{BADGE} text-[10px] bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
+              >Free · {resolution.aspect} · {(v.finalResolution > 0 ? v.finalResolution : 0.7).toFixed(2)} MP ({freeDims.w}×{freeDims.h})</span
+            >{:else}<span class="{BADGE} {BADGE_SECONDARY} text-[10px]">{v.resolution}</span>{/if}
+          <span class="{BADGE} {BADGE_SECONDARY} text-[10px]">{(v.videoLength / 24).toFixed(1)} s · 24 fps</span>
+          <span class="{BADGE} text-[10px] bg-amber-500/15 text-amber-400 border-amber-500/30"
+            >2-Pass · {v.finalResolution || "auto"} MP</span
+          >
+          {#if v.refs.length > 0}<span class="{BADGE} {BADGE_SECONDARY} text-[10px]">{v.refs.length} reference(s)</span>{/if}
         </div>
-        {#if $gallery.folders.length}<div class="relative shrink-0">
+        {#if $gallery.folders.length > 0}<div class="relative shrink-0">
             <button
-              class="h-11 inline-flex items-center gap-1.5 px-3 rounded-lg border text-xs border-border bg-[var(--surface-2)] text-muted-foreground hover:text-foreground"
+              type="button"
               onclick={() => (folderMenu = !folderMenu)}
-              ><Folder class="w-3.5 h-3.5" /><span
-                class="max-w-[120px] truncate"
-                >{v.outputFolder || "Shared folder"}</span
-              ><ChevronDown class="w-3 h-3" /></button
-            >{#if folderMenu}<div
-                class="absolute bottom-full mb-1.5 right-0 z-50 w-52 rounded-lg border border-border bg-[var(--surface-2)] shadow-xl p-1"
+              class="h-11 inline-flex items-center gap-1.5 px-3 rounded-lg border text-xs transition-colors {v.outputFolder
+                ? 'border-violet-500/40 bg-violet-500/10 text-violet-300'
+                : 'border-border bg-[var(--surface-2)] text-muted-foreground hover:text-foreground'}"
+              title="Project folder: videos are placed in it, the gallery only shows it"
+            >
+              <Folder class="w-3.5 h-3.5" />
+              <span class="max-w-[120px] truncate">{v.outputFolder || "Shared folder"}</span>
+              <ChevronDown class="w-3 h-3 transition-transform {folderMenu ? 'rotate-180' : ''}" />
+            </button>
+            {#if folderMenu}
+              <div class="fixed inset-0 z-40" role="presentation" onclick={() => (folderMenu = false)}></div>
+              <div
+                class="absolute bottom-full mb-1.5 right-0 z-50 w-52 rounded-lg border border-border bg-[var(--surface-2)] shadow-xl p-1 max-h-64 overflow-y-auto"
               >
-                {#each ["", ...$gallery.folders] as folder}<button
-                    class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-left hover:bg-[var(--surface-3)]"
+                <button
+                  type="button"
+                  onclick={() => {
+                    patch({ outputFolder: "" });
+                    folderMenu = false;
+                  }}
+                  class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-left transition-colors {!v.outputFolder
+                    ? 'bg-violet-500/10 text-violet-300'
+                    : 'hover:bg-[var(--surface-3)] text-foreground/80'}"
+                >
+                  <Film class="w-3.5 h-3.5 shrink-0" />
+                  <span class="flex-1 truncate">Shared folder</span>
+                </button>
+                {#each $gallery.folders as f (f)}<button
+                    type="button"
                     onclick={() => {
-                      patch({ outputFolder: folder });
+                      patch({ outputFolder: f });
                       folderMenu = false;
                     }}
-                    ><Folder class="w-3.5 h-3.5" />{folder ||
-                      "Shared folder"}</button
-                  >{/each}
-              </div>{/if}
+                    class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-left transition-colors {v.outputFolder ===
+                    f
+                      ? 'bg-violet-500/10 text-violet-300'
+                      : 'hover:bg-[var(--surface-3)] text-foreground/80'}"
+                  >
+                    <Folder class="w-3.5 h-3.5 shrink-0" />
+                    <span class="flex-1 truncate">{f}</span>
+                  </button>{/each}
+              </div>
+            {/if}
           </div>{/if}
         <button
-          class="inline-flex items-center justify-center rounded-md h-11 px-6 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white border-0 text-sm font-semibold shadow-lg shadow-cyan-500/20 disabled:opacity-50 disabled:pointer-events-none"
-          disabled={!controller ||
-            uploading ||
-            !v.prompt.trim() ||
-            (v.mode === "flf" && !v.startFrame)}
-          onclick={generate}
+          onclick={() => void generate()}
+          disabled={!controller || !v.prompt.trim()}
+          title={v.prompt.trim() ? "Generate video (Ctrl+Enter)" : "Enter prompt"}
+          class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md transition-all disabled:pointer-events-none disabled:opacity-50 outline-none h-11 px-6 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white border-0 text-sm font-semibold shadow-lg shadow-cyan-500/20"
           >{active ? "Add to queue" : "Generate video"}</button
         >
       </div>
@@ -896,50 +915,98 @@
 </div>
 <PromptEditor
   bind:open={editor}
-  prompt={v.prompt}
-  refs={v.refs.filter((r) => v.mode === "ref" || r.kind === "audio")}
-  {tagFor}
+  initialText={v.prompt}
   onsave={changePrompt}
-  onrun={controller ? () => void generate() : undefined}
+  onsaveandrun={controller ? () => void generate() : undefined}
+  placeholder="A girl with <Picture 1> walks through the market from <Video 1> and says: <d>Almost there.</d> …"
+  {mentions}
 />
-{#if showHistory}<div
-    style:left={`${historyPosition.left}px`}
-    style:top={`${historyPosition.top}px`}
+{#if showHistory || examples}<div
+    class="fixed inset-0 z-[95]"
+    role="presentation"
+    onclick={() => {
+      showHistory = false;
+      examples = false;
+    }}
+  ></div>{/if}
+{#if showHistory && historyAnchor}<div
     class="fixed z-[100] w-[340px] max-h-80 overflow-y-auto rounded-lg border border-border bg-[var(--surface-3)] shadow-2xl shadow-black/60"
+    style={dropdownPos(historyAnchor)}
     role="region"
     aria-label="Prompt history"
   >
-    <div class="px-2.5 py-1.5 border-b border-border flex justify-between">
-      <span class="text-[10px] font-semibold">History of prompts</span><button
-        class="text-[9px] text-muted-foreground hover:text-red-400"
-        onclick={() => usePromptHistory.getState().clear()}
-        >clear everything</button
+    <div class="flex items-center justify-between px-2.5 py-1.5 border-b border-border sticky top-0 bg-[var(--surface-3)]">
+      <span class="text-[10px] font-semibold text-foreground">History of prompts</span>
+      {#if $history.entries.length > 0}<button
+          type="button"
+          onclick={() => usePromptHistory.getState().clear()}
+          class="text-[9px] text-muted-foreground hover:text-red-400">clear everything</button
+        >{/if}
+    </div>
+    {#if $history.entries.length === 0}<p class="px-2.5 py-3 text-[11px] text-muted-foreground">
+        While empty, launched prompts are saved here automatically.
+      </p>{/if}
+    {#each $history.entries as entry (entry.id)}<div
+        class="group flex items-start gap-2 px-2.5 py-1.5 hover:bg-white/5 cursor-pointer"
+        role="button"
+        tabindex="0"
+        onclick={() => {
+          changePrompt(entry.text);
+          showHistory = false;
+          toast.success("Prompt inserted from history");
+        }}
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            changePrompt(entry.text);
+            showHistory = false;
+          }
+        }}
       >
-    </div>
-    <div class="max-h-80 overflow-auto space-y-1">
-      {#each $history.entries as entry (entry.id)}<div
-          class="group flex items-start gap-2 px-2.5 py-1.5 hover:bg-white/5"
+        <button
+          type="button"
+          onclick={(ev) => {
+            ev.stopPropagation();
+            usePromptHistory.getState().toggleFavorite(entry.id);
+          }}
+          title={entry.favorite ? "Remove from favorites" : "Add to favorites"}
+          class="shrink-0 mt-0.5 w-4 h-4 flex items-center justify-center transition-colors {entry.favorite
+            ? 'text-amber-400'
+            : 'text-muted-foreground/40 hover:text-amber-400'}"
         >
-          <button
-            class="flex-1 text-left text-[11px] text-foreground/80 line-clamp-3"
-            onclick={() => {
-              changePrompt(entry.text);
-              showHistory = false;
-            }}>{entry.text}</button
-          ><button
-            aria-label="Toggle favorite"
-            onclick={() => usePromptHistory.getState().toggleFavorite(entry.id)}
-            ><Star
-              class="w-3 h-3"
-              fill={entry.favorite ? "currentColor" : "none"}
-            /></button
-          ><button
-            aria-label="Remove prompt"
-            onclick={() => usePromptHistory.getState().remove(entry.id)}
-            ><Trash2 class="w-3 h-3" /></button
-          >
-        </div>{:else}<p class="text-[11px] text-muted-foreground">
-          While empty, launched prompts are saved here automatically.
-        </p>{/each}
+          <Star class="w-3 h-3" fill={entry.favorite ? "currentColor" : "none"} />
+        </button>
+        <p class="flex-1 min-w-0 text-[11px] text-foreground/90 leading-snug line-clamp-2 break-words">{entry.text}</p>
+        <button
+          type="button"
+          onclick={(ev) => {
+            ev.stopPropagation();
+            usePromptHistory.getState().remove(entry.id);
+          }}
+          class="shrink-0 mt-0.5 w-4 h-4 flex items-center justify-center text-muted-foreground/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Remove from history"
+        >
+          <X class="w-3 h-3" />
+        </button>
+      </div>{/each}
+  </div>{/if}
+{#if examples && examplesAnchor}<div
+    class="fixed z-[100] w-[340px] max-h-80 overflow-y-auto rounded-lg border border-border bg-[var(--surface-3)] shadow-2xl shadow-black/60"
+    style={dropdownPos(examplesAnchor)}
+  >
+    <div class="px-2.5 py-1.5 border-b border-border sticky top-0 bg-[var(--surface-3)]">
+      <span class="text-[10px] font-semibold text-foreground">Ready-made examples</span>
     </div>
+    {#each EXAMPLES as ex (ex.title)}<div
+        class="px-2.5 py-1.5 hover:bg-white/5 cursor-pointer"
+        role="button"
+        tabindex="0"
+        onclick={() => applyExample(ex.text)}
+        onkeydown={(e) => e.key === "Enter" && applyExample(ex.text)}
+      >
+        <p class="text-[11px] font-medium text-foreground">{ex.title}</p>
+        <p class="text-[10px] text-muted-foreground/80 line-clamp-2 leading-snug break-words">{ex.text}</p>
+      </div>{/each}
+    <p class="px-2.5 py-2 text-[9px] text-muted-foreground/60 border-t border-border">
+      Replaces the current prompt (with the ability to cancel). Prompts are in English: the model understands it best.
+    </p>
   </div>{/if}

@@ -42,6 +42,8 @@
         ? 'w-[80vw] h-[85vh]'
         : kind === 'confirm'
           ? 'w-[384px]'
+          : kind === 'reference'
+            ? 'w-[72rem] max-h-[90vh] overflow-hidden'
           : wide
             ? 'w-[950px]'
             : 'w-[512px]'}"
@@ -65,7 +67,9 @@
     kind === 'metadata' ||
     kind === 'editor'
       ? 'h-full'
-      : 'p-6 gap-4'}"
+      : kind === 'reference'
+        ? ''
+        : 'p-6 gap-4'}"
   >
     {#if header}{@render header()}{:else}<header
         class="shrink-0 {kind === 'settings'
@@ -74,12 +78,16 @@
             ? 'px-4 py-3 border-b border-border'
             : kind === 'editor'
               ? 'px-4 pt-3 pb-2'
-              : ''}"
+              : kind === 'reference'
+                ? 'px-4 pt-4 pb-2'
+                : ''}"
       >
         <h2
           class="{kind === 'metadata'
-            ? 'text-sm'
-            : 'text-lg'} leading-none font-semibold flex items-center gap-2"
+            ? 'text-sm leading-none font-semibold'
+            : kind === 'reference'
+              ? 'text-sm font-medium'
+              : 'text-lg leading-none font-semibold'} flex items-center gap-2"
         >
           {#if icon}{@render icon()}{/if}{title}
         </h2>

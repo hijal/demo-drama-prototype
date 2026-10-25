@@ -11,6 +11,8 @@
   import { startGallery } from "./lib/gallery";
   import { api, message } from "./lib/api";
   import { toast } from "@/lib/notifications";
+  import { Toaster, toast as sonner } from "svelte-sonner";
+  import { AlertTriangle, Download, X } from "lucide-svelte";
   let tab = $state<"generate" | "gallery" | "pipeline">("generate");
   let manual = $state(true);
   let capabilitiesReady = $state(false);
@@ -18,20 +20,22 @@
   let connected = $state(false);
   let checking = $state(true);
   let stats = $state<any>(null);
-  let missing = $state(0);
-  let notices = $state<Notice[]>([]);
+  let missing = $state<{ label: string }[]>([]);
+  let bannerDismissed = $state(false);
   let controller = $state<ReturnType<typeof createVideoGeneration>>();
   onMount(() => {
     let stopGallery = () => {};
-    const timers = new Set<ReturnType<typeof setTimeout>>();
     const notice = (event: Event) => {
       const item = (event as CustomEvent<Notice>).detail;
-      notices = [...notices.slice(-3), item];
-      const t = setTimeout(() => {
-        notices = notices.filter((n) => n.id !== item.id);
-        timers.delete(t);
-      }, item.duration ?? 7000);
-      timers.add(t);
+      const show =
+        item.kind === "error" || item.kind === "warning" || item.kind === "info" || item.kind === "success"
+          ? sonner[item.kind]
+          : sonner;
+      show(item.text, {
+        description: item.description,
+        duration: item.duration,
+        action: item.action,
+      });
     };
     const navigate = () => (tab = "generate");
     const cancel = () => void controller?.interrupt();
@@ -43,7 +47,11 @@
       if (!manual) {
         try {
           const status = await api("/api/status");
-          if (!disposed) connected = !!status.gpu?.length;
+          if (!disposed) {
+            connected = !!status.gpu?.length;
+            // The Colab GPU worker reports system stats with its heartbeat.
+            stats = status.gpu?.[0]?.info?.stats ?? null;
+          }
         } catch {}
         checking = false;
         polling = false;
@@ -59,8 +67,8 @@
         if (results[1].status === "fulfilled") stats = results[1].value;
         if (results[2].status === "fulfilled")
           missing = (results[2].value.models ?? []).filter(
-            (m: any) => !m.optional && m.status !== "ready",
-          ).length;
+            (m: any) => !m.optional && m.status !== "ready" && m.status !== "downloading",
+          );
       }
       checking = false;
       polling = false;
@@ -85,7 +93,6 @@
     return () => {
       disposed = true;
       clearInterval(interval);
-      timers.forEach(clearTimeout);
       stopGallery();
       controller?.dispose();
       window.removeEventListener("h3:notice", notice);
@@ -96,9 +103,9 @@
   async function freeMemory() {
     try {
       await api("/api/comfy/free", { weights: "high" });
-      toast.success("GPU memory released");
+      toast.success("VRAM cache unloaded");
     } catch (e) {
-      toast.error(message(e));
+      toast.error(message(e) || "Failed to unload cache");
     }
   }
 </script>
@@ -115,12 +122,26 @@
     {stats}
   />
   <main class="flex-1 min-w-0 relative flex flex-col">
-    {#if missing > 0}<div
-        class="px-4 py-2 text-xs text-amber-400 bg-amber-500/10 border-b border-amber-500/20"
+    {#if missing.length > 0 && !bannerDismissed}{@const label =
+        missing.length === 1
+          ? `Model not downloaded: ${missing[0].label}`
+          : missing.length === 2
+            ? `Models not downloaded: ${missing.map((m) => m.label).join(", ")}`
+            : `No models downloaded: ${missing.length}. Generation will not work correctly.`}<div
+        class="flex items-center gap-3 px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 shrink-0"
       >
-        {missing} required model files need attention.
-        <button class="underline" onclick={() => (settings = true)}
-          >Open models</button
+        <AlertTriangle class="w-4 h-4 text-amber-400 shrink-0" />
+        <span class="text-xs text-amber-300 flex-1 min-w-0 truncate" title={label}>{label}</span>
+        <button
+          class="inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-all border shadow-xs bg-background dark:bg-input/30 h-7 px-3 text-[11px] text-amber-300 border-amber-500/30 hover:bg-amber-500/10 hover:text-amber-200 shrink-0"
+          onclick={() => (settings = true)}
+          ><Download class="w-3 h-3" />Download in settings</button
+        >
+        <button
+          type="button"
+          onclick={() => (bannerDismissed = true)}
+          class="p-1 rounded hover:bg-amber-500/20 text-amber-400/70 hover:text-amber-300 shrink-0"
+          title="Hide"><X class="w-3.5 h-3.5" /></button
         >
       </div>{/if}
     <div class="flex-1 min-h-0 relative">
@@ -151,27 +172,10 @@
     {#if manual}<Queue />{/if}
   </main>
   <Settings bind:open={settings} enabled={manual} />
-  <div
-    class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm"
-    aria-live="polite"
-  >
-    {#each notices as notice (notice.id)}<div
-        class="rounded-lg border border-border bg-[var(--surface-3)] px-4 py-3 shadow-lg text-sm {notice.kind ===
-        'error'
-          ? 'text-red-400'
-          : 'text-foreground'}"
-        role={notice.kind === "error" ? "alert" : "status"}
-      >
-        <strong>{notice.text}</strong>{#if notice.description}<p
-            class="text-xs text-muted-foreground mt-1"
-          >
-            {notice.description}
-          </p>{/if}<button
-          class="ml-3 text-muted-foreground"
-          aria-label="Dismiss notification"
-          onclick={() => (notices = notices.filter((n) => n.id !== notice.id))}
-          >×</button
-        >
-      </div>{/each}
-  </div>
+  <Toaster
+    position="bottom-right"
+    theme="dark"
+    class="toaster group"
+    style="--normal-bg: var(--popover); --normal-text: var(--popover-foreground); --normal-border: var(--border);"
+  />
 </div>

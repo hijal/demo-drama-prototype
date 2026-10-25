@@ -91,7 +91,7 @@
   aria-controls={uid}
   aria-haspopup="listbox"
   {disabled}
-  class="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-input/30 px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 h-9"
+  class="flex w-full items-center justify-between gap-2 rounded-md border border-border bg-[var(--surface-2)] px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 h-9"
   onclick={open}
   onkeydown={(e) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {

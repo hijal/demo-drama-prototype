@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SystemStatsBar from "./SystemStatsBar.svelte";
   import {
     Clapperboard,
     FolderOpen,
@@ -6,10 +7,6 @@
     ChevronLeft,
     ChevronRight,
     PanelsTopLeft,
-    Cpu,
-    MemoryStick,
-    MonitorCog,
-    Trash2,
   } from "lucide-svelte";
   let {
     onfree,
@@ -31,44 +28,6 @@
     stats?: any;
   } = $props();
   let collapsed = $state(false);
-  const rows = $derived(
-    stats?.ram && typeof stats.cpu?.percent === "number"
-      ? [
-          ...(stats.gpu?.available
-            ? [
-                {
-                  label: "VRAM",
-                  value: stats.gpu.vram_used_gb,
-                  max: stats.gpu.vram_total_gb,
-                  color: "#06B6D4",
-                  icon: MonitorCog,
-                },
-                {
-                  label: "GPU",
-                  value: stats.gpu.utilization_percent,
-                  max: 100,
-                  color: "#8B5CF6",
-                  icon: MonitorCog,
-                },
-              ]
-            : []),
-          {
-            label: "RAM",
-            value: stats.ram.used_gb,
-            max: stats.ram.total_gb,
-            color: "#10B981",
-            icon: MemoryStick,
-          },
-          {
-            label: "CPU",
-            value: stats.cpu.percent,
-            max: 100,
-            color: "#F59E0B",
-            icon: Cpu,
-          },
-        ]
-      : [],
-  );
 </script>
 
 <aside
@@ -121,43 +80,7 @@
       </button>
     {/each}
   </nav>
-  {#if rows.length}<div
-      class="border-t border-border {collapsed
-        ? 'px-2 py-1 space-y-0.5'
-        : 'px-3 py-2 space-y-1.5'}"
-    >
-      {#each rows as row}<div
-          class="flex items-center gap-1.5"
-          title={row.label}
-        >
-          {#if !collapsed}<row.icon
-              class="w-3 h-3 shrink-0"
-              style={`color:${row.color}`}
-            /><span class="text-[9px] text-muted-foreground w-7 shrink-0"
-              >{row.label}</span
-            >{/if}
-          <div
-            class="flex-1 h-1.5 bg-[var(--surface-3)] rounded-full overflow-hidden"
-          >
-            <div
-              class="h-full rounded-full transition-all duration-700"
-              style:width={`${Math.min(100, (row.value / Math.max(1, row.max)) * 100)}%`}
-              style:background-color={row.color}
-            ></div>
-          </div>
-          {#if !collapsed}<span
-              class="text-[9px] font-mono text-muted-foreground tabular-nums shrink-0"
-              >{Math.round((row.value / Math.max(1, row.max)) * 100)}%</span
-            >{/if}
-        </div>{/each}
-    </div>{/if}
-  {#if rows.length && !collapsed}<div class="px-3 pb-2">
-      <button
-        class="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-red-400 transition-colors"
-        title="Unload ComfyUI models from VRAM"
-        onclick={onfree}><Trash2 class="w-3 h-3" />Unload VRAM cache</button
-      >
-    </div>{/if}
+  <SystemStatsBar data={stats} {collapsed} onfree={manual ? onfree : undefined} />
   <div class="px-2 py-2 border-t border-border space-y-0.5">
     <div
       title={manual ? "ComfyUI connection" : "Colab connection"}
@@ -165,13 +88,19 @@
         ? 'justify-center'
         : 'px-3'}"
     >
-      <span
-        class="w-2 h-2 rounded-full shrink-0 {connected
-          ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]'
-          : checking
-            ? 'bg-yellow-400 animate-pulse'
-            : 'bg-red-400'}"
-      ></span>{#if !collapsed}<span
+      <span class="relative flex h-2 w-2 shrink-0"
+        >{#if !checking}<span
+            class="absolute inline-flex h-full w-full rounded-full opacity-60 {connected
+              ? 'animate-ping bg-emerald-400'
+              : 'bg-red-400'}"
+          ></span>{/if}<span
+          class="relative inline-flex h-2 w-2 rounded-full {connected
+            ? 'bg-emerald-400'
+            : checking
+              ? 'bg-muted-foreground'
+              : 'bg-red-400'}"
+        ></span></span
+      >{#if !collapsed}<span
           >{checking
             ? "Checking..."
             : manual

@@ -4,12 +4,14 @@ export interface Notice {
   text: string
   description?: string
   duration?: number
+  action?: { label: string; onClick: () => void }
 }
+type NoticeOptions = Pick<Notice, 'description' | 'duration' | 'action'>
 let nextId = 0
 function show(
   kind: string,
   text: string,
-  options?: { description?: string; duration?: number },
+  options?: NoticeOptions,
 ) {
   if (typeof window !== 'undefined')
     window.dispatchEvent(
@@ -21,10 +23,9 @@ function show(
 export const toast = Object.fromEntries(
   ['error', 'warning', 'info', 'success'].map((kind) => [
     kind,
-    (text: string, options?: { description?: string; duration?: number }) =>
-      show(kind, text, options),
+    (text: string, options?: NoticeOptions) => show(kind, text, options),
   ]),
 ) as Record<
   'error' | 'warning' | 'info' | 'success',
-  (text: string, options?: { description?: string; duration?: number }) => void
+  (text: string, options?: NoticeOptions) => void
 >

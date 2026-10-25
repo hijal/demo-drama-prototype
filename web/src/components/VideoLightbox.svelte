@@ -96,14 +96,17 @@
       role="presentation"
     >
       <div
-        class="flex-1 relative flex items-center justify-center min-h-0 min-w-0"
+        class="flex-1 relative flex items-center justify-center group min-h-0 min-w-0"
+        style:cursor={controls ? "default" : "none"}
       >
         {#key file.url + retry}<video
             bind:this={video}
             src={file.url}
             class="max-w-full max-h-full object-contain"
             autoplay
+            loop
             playsinline
+            preload="metadata"
             bind:muted
             onplay={() => (playing = true)}
             onpause={() => (playing = false)}
@@ -117,11 +120,11 @@
           >
             <p class="text-sm text-white/80">Failed to load video</p>
             <button
-              class="px-4 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-medium"
+              class="px-4 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-medium transition-colors"
               onclick={() => retry++}>Retry</button
             >
-          </div>{:else if !playing}<div
-            class="absolute inset-0 flex items-center justify-center pointer-events-none"
+          </div>{:else if !playing && controls}<div
+            class="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30"
           >
             <Play class="w-20 h-20 text-white fill-white/50" />
           </div>{/if}
@@ -129,36 +132,40 @@
           class="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 transition-opacity duration-300 {controls
             ? 'opacity-100'
             : 'opacity-0 pointer-events-none'}"
-          style="background:linear-gradient(to bottom,rgba(0,0,0,.7),transparent)"
+          style="background:linear-gradient(to bottom,rgba(0,0,0,0.7) 0%,transparent 100%)"
         >
           <div class="flex items-center gap-3 min-w-0">
-            <h3 class="text-sm text-white/90 font-medium truncate">
+            <h3 class="text-sm text-white/90 font-medium truncate max-w-[60%]">
               {file.filename}
             </h3>
             <span class="text-xs text-white/40 font-mono"
-              >{files.findIndex((f) => f.url === file.url) + 1} / {files.length}</span
+              >{files.findIndex((f) => f.url === file.url) + 1}/{files.length}</span
             >
           </div>
           <div class="flex items-center gap-1.5">
             <a
               title="Download"
-              class="p-2 rounded-lg bg-white/10 hover:bg-white/20"
+              class="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
               href={`${file.url}${file.url.includes("?") ? "&" : "?"}download=1`}
               download={file.filename}><Download class="w-4 h-4" /></a
-            >{#if confirmDelete}<button
-                class="px-3 py-1.5 rounded-lg bg-red-500/80 text-xs"
-                onclick={() => ondelete(file!)}>Delete</button
-              ><button
-                class="px-3 py-1.5 rounded-lg bg-white/10 text-xs"
-                onclick={() => (confirmDelete = false)}>Cancel</button
-              >{:else}<button
+            >{#if confirmDelete}<div class="flex items-center gap-1 ml-1">
+                <button
+                  class="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white text-xs font-medium transition-colors"
+                  onclick={() => ondelete(file!)}>Delete</button
+                ><button
+                  class="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs transition-colors"
+                  onclick={() => (confirmDelete = false)}>Cancel</button
+                >
+              </div>{:else}<button
                 aria-label="Delete video"
-                class="p-2 rounded-lg bg-white/10 hover:bg-red-500/40"
+                title="Delete"
+                class="p-2 rounded-lg bg-white/10 hover:bg-red-500/40 text-white transition-colors"
                 onclick={() => (confirmDelete = true)}
                 ><Trash2 class="w-4 h-4" /></button
               >{/if}<button
               aria-label="Close preview"
-              class="p-2 rounded-lg bg-white/10 hover:bg-white/20 ml-1"
+              title="Close (Esc)"
+              class="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors ml-1"
               onclick={() => (open = false)}><X class="w-4 h-4" /></button
             >
           </div>
@@ -167,31 +174,49 @@
           class="absolute bottom-0 left-0 right-0 transition-opacity duration-300 {controls
             ? 'opacity-100'
             : 'opacity-0 pointer-events-none'}"
-          style="background:linear-gradient(to top,rgba(0,0,0,.8),transparent)"
+          style="background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,transparent 100%)"
         >
-          <input
-            class="block w-[calc(100%-2rem)] mx-4 mb-2 h-1 accent-cyan-500 cursor-pointer"
+          <div
+            class="mx-4 mb-2 h-1 bg-white/20 rounded-full cursor-pointer group/bar hover:h-1.5 transition-all"
+            role="slider"
+            tabindex="0"
             aria-label="Seek video"
-            type="range"
-            min="0"
-            max={Number.isFinite(duration) ? duration : 0}
-            step="0.01"
-            value={time}
-            oninput={(e) => {
-              if (video) video.currentTime = Number(e.currentTarget.value);
+            aria-valuemin={0}
+            aria-valuemax={Number.isFinite(duration) ? duration : 0}
+            aria-valuenow={time}
+            onclick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              if (video && Number.isFinite(duration) && duration > 0)
+                video.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * duration;
             }}
-          />
+            onkeydown={(e) => {
+              if (!video) return;
+              if (e.key === "ArrowLeft") video.currentTime = Math.max(0, video.currentTime - 5);
+              if (e.key === "ArrowRight") video.currentTime = Math.min(duration, video.currentTime + 5);
+            }}
+          >
+            <div
+              class="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full relative"
+              style:width={`${duration > 0 ? (time / duration) * 100 : 0}%`}
+            >
+              <div
+                class="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover/bar:opacity-100 transition-opacity shadow-lg"
+              ></div>
+            </div>
+          </div>
           <div class="flex items-center justify-between px-4 pb-3">
             <div class="flex items-center gap-2">
               <button
-                class="p-1.5 text-white/90 hover:text-white"
+                class="p-1.5 text-white/90 hover:text-white transition-colors"
+                title="Play/Pause (Space)"
                 aria-label="Play/Pause (Space)"
                 onclick={toggle}
                 >{#if playing}<Pause class="w-5 h-5 fill-current" />{:else}<Play
                     class="w-5 h-5 fill-current"
                   />{/if}</button
               ><button
-                class="p-1.5 text-white/70 hover:text-white"
+                class="p-1.5 text-white/70 hover:text-white transition-colors"
+                title="Mute (M)"
                 aria-label="Mute (M)"
                 onclick={() => (muted = !muted)}
                 >{#if muted}<VolumeX class="w-4 h-4" />{:else}<Volume2
@@ -202,9 +227,10 @@
                 type="range"
                 min="0"
                 max="1"
-                step="0.01"
-                class="w-20 h-1 accent-cyan-500"
-                value={volume}
+                step="0.05"
+                class="w-20 h-1 accent-cyan-500 cursor-pointer"
+                title={`Volume: ${Math.round((muted ? 0 : volume) * 100)}%`}
+                value={muted ? 0 : volume}
                 oninput={(e) => {
                   volume = Number(e.currentTarget.value);
                   muted = volume === 0;
@@ -218,26 +244,31 @@
             {#if files.length > 1}<div class="flex items-center gap-1.5">
                 <button
                   aria-label="Previous"
-                  class="p-1.5 text-white/70"
+                  title="Previous"
+                  class="p-1.5 text-white/70 hover:text-white transition-colors"
                   onclick={onprevious}><ChevronLeft class="w-4 h-4" /></button
                 ><button
                   aria-label="Next"
-                  class="p-1.5 text-white/70"
+                  title="Next"
+                  class="p-1.5 text-white/70 hover:text-white transition-colors"
                   onclick={onnext}><ChevronRight class="w-4 h-4" /></button
                 >
               </div>{/if}
           </div>
         </div>
-        {#if files.length > 1}{#each [{ label: "Previous", icon: ChevronLeft, action: onprevious, side: "left-4" }, { label: "Next", icon: ChevronRight, action: onnext, side: "right-4" }] as item}<button
-              class="absolute {item.side} top-1/2 -translate-y-1/2 p-3 rounded-xl bg-black/40 hover:bg-black/60 text-white/80 backdrop-blur-sm"
+        {#if files.length > 1 && controls}{#each [{ label: "Previous", icon: ChevronLeft, action: onprevious, side: "left-4" }, { label: "Next", icon: ChevronRight, action: onnext, side: "right-4" }] as item}<button
+              class="absolute {item.side} top-1/2 -translate-y-1/2 p-3 rounded-xl bg-black/40 hover:bg-black/60 text-white/80 backdrop-blur-sm transition-colors"
               aria-label={`${item.label} video`}
               onclick={item.action}><item.icon class="w-5 h-5" /></button
             >{/each}{/if}
       </div>
-      <div
-        class="absolute bottom-[80px] left-1/2 -translate-x-1/2 flex items-center gap-4 text-[10px] text-white/30 pointer-events-none"
-      >
-        Space — play/pause · ← → — navigation · M — mute · Esc — close
-      </div>
+      {#if controls}<div
+          class="absolute bottom-[80px] left-1/2 -translate-x-1/2 flex items-center gap-4 text-[10px] text-white/30 pointer-events-none"
+        >
+          <span>Space — Play/Pause</span>
+          <span>M — Mute</span>
+          <span>←→ — Navigation</span>
+          <span>Esc - Close</span>
+        </div>{/if}
     </div>{/if}
 </dialog>

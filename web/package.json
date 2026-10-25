@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "lucide-svelte": "^0.525.0",
-    "svelte": "^5.57.2"
+    "svelte": "^5.57.2",
+    "svelte-sonner": "^1.2.1"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^6.0.0",
