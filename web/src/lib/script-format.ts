@@ -3,26 +3,35 @@
  * The owner pastes this, fills in the story idea, and the AI answers with a
  * script in the canonical format from docs/SCRIPT_FORMAT.md.
  *
- * The structure follows the owner's best single-film scripts (40 s, 6 scenes,
- * narrator bookends, detailed cast, SHOT blocks). The example is synthetic;
- * the owner's own scripts must not be committed to this public repo.
+ * The structure follows the owner's best single-film scripts (narrator
+ * bookends, detailed cast, SHOT blocks). Runtime and scene count are chosen by
+ * the owner; the 40 s / 6-scene example only shows the format. The example is
+ * synthetic; the owner's own scripts must not be committed to this public repo.
  */
-export const SINGLE_SCRIPT_PROMPT = `You are a screenwriter for an AI video pipeline (MiniMax H3). Write ONE short cozy film script about the story idea below.
+export const SINGLE_SCRIPT_PROMPT = `You are a screenwriter for an AI video pipeline (MiniMax H3). Write ONE short film script about the story idea below.
 
 STORY IDEA: <write your idea here>
-RUNTIME: 40s (6 scenes)
+GENRE: <e.g. cozy comedy, family drama, thriller>
+RUNTIME: <total seconds, e.g. 40s, 60s, 90s>
+SCENES: <number of scenes, e.g. 6, or "you decide">
 ASPECT: 16:9
 LANGUAGE: English
 
-Reply with ONLY the script as plain text inside one code block, in exactly the same format and level of detail as the EXAMPLE. No explanations before or after.
+Reply with ONLY the script as plain text inside one code block, in exactly the same format and level of detail as the EXAMPLE. No explanations before or after. The EXAMPLE is 6 scenes and 40 seconds only to show the format; follow the RUNTIME and SCENES above, not the example's length.
 
-STORY SHAPE (6 scenes, total 40 seconds)
-- Scene 1 | 6s | Setup: the main character with the key object, one narrator line. CLIP: still.
-- Scene 2 | 7s | Problem: something is missing or wrong. 2 shots (4s + 3s).
-- Scene 3 | 8s | Trying harder: the character tries again and fails. 2 shots (4s + 4s).
-- Scene 4 | 10s | Twist: a second character arrives and changes something. 3 shots (4s + 3s + 3s).
-- Scene 5 | 5s | Payoff: the main character discovers it is now perfect. CLIP: hero.
-- Scene 6 | 4s | Ending: both characters together, the narrator repeats/echoes the scene 1 line. CLIP: still, TRANSITION: fade 1s.
+TIMING
+- Scene durations must add up to RUNTIME (within 1 second). RUNTIME in the header must state that total.
+- Each scene lasts 2.5–29.9 seconds; prefer 4–12 seconds. If SCENES is "you decide", pick a count that gives about 5–10 seconds per scene.
+- Scenes longer than about 6 seconds should be split into 2–3 SHOT blocks (each shot 2–5 seconds).
+
+STORY SHAPE (scale it to the number of scenes)
+- First scene: setup — the main character with the key object, one narrator line. CLIP: still.
+- Early scenes: the problem — something is missing or wrong.
+- Middle scenes: trying harder and failing, or the conflict growing. Use as many as the length needs.
+- Late scene: the twist — another character or event changes something.
+- Second-to-last scene: the payoff — the main character discovers it is now right. CLIP: hero.
+- Last scene: the ending — the characters together, the narrator echoes the first scene's line. CLIP: still, TRANSITION: fade 1s.
+- Very short films may merge beats (e.g. 3 scenes: setup+problem, twist, payoff+ending).
 
 HEADER
 - First line: DRAMA SCRIPT. Then TITLE, LOGLINE, GENRE, LANGUAGE, ASPECT, ALT ASPECT, RESOLUTION, FPS, RUNTIME, STYLE, SETTING, STYLE PROMPT, NEGATIVE PROMPT.
@@ -32,17 +41,17 @@ HEADER
 
 CAST, PROPS, LOCATION
 - Give everything a unique lowercase ID (@name) and use exactly those IDs everywhere.
-- Two human characters, each with ALL of: ROLE, AGE, GENDER, FACE, SKIN, EYES, HAIR, BUILD, OUTFIT, ACCESSORIES, PERSONALITY, VOICE, ACCENT. Give each face one distinctive mark (mole, scar, freckles, dimple) so it stays recognisable.
+- Usually two human characters (add more only if the story needs them), each with ALL of: ROLE, AGE, GENDER, FACE, SKIN, EYES, HAIR, BUILD, OUTFIT, ACCESSORIES, PERSONALITY, VOICE, ACCENT. Give each face one distinctive mark (mole, scar, freckles, dimple) so it stays recognisable. Animal characters use SPECIES and LOOK instead of FACE/SKIN/HAIR.
 - One narrator: CHARACTER @narrator | Narrator | voice_only, with only VOICE and ACCENT.
-- 2–4 props, each with LOOK (colour, material, size) and RULE (stays identical every time). If a prop visibly changes, add VARIANT name | scene range | description (e.g. VARIANT stirred | 5-6 | ...).
-- Exactly one LOCATION with LOOK and LIGHT.
+- 2–4 props, each with LOOK (colour, material, size) and RULE (stays identical every time). If a prop visibly changes, add VARIANT name | scene range | description (e.g. VARIANT stirred | 5-6 | ...), using real scene numbers from your script.
+- Prefer one LOCATION with LOOK and LIGHT; add more only if the story really moves.
 - == RULES == with RULE lines for continuity and this NOTE: Keep dialogue, narration, music and effects on separate audio tracks.
 
 SCENES
-- Scene header: SCENE n | Ns | Title. Scene fields are indented 2 spaces; SHOT fields 4 spaces.
-- Scene 1 has AT: @location, time of day. Later scenes have AT: @location.
+- Scene header: SCENE n | Ns | Title, numbered 1, 2, 3… Scene fields are indented 2 spaces; SHOT fields 4 spaces.
+- The first scene (and any scene in a new location) has AT: @location, time of day. Other scenes have AT: @location.
 - CAST lists everyone visible or speaking. Mark partly visible people "(glimpsed)" and the narrator "@narrator (voice)".
-- Every scene has MOOD. Scene 1 has the full MUSIC line: MUSIC: Description. | sound: instruments, tempo | fade_in: 0.5s | fade_out: 1s. Later scenes repeat MUSIC: Description. Scene 5 may say the music turns brighter.
+- Every scene has MOOD. The first scene has the full MUSIC line: MUSIC: Description. | sound: instruments, tempo | fade_in: 0.5s | fade_out: 1s. Later scenes repeat MUSIC: Description. The payoff scene may say the music turns brighter.
 - Scenes without shots need CLIP, LIPSYNC, VISUAL, KEYFRAME, CAMERA, FRAME. Each SHOT n | Ns | wide/close-up needs LIPSYNC, VISUAL, KEYFRAME, CAMERA, FRAME; mark the dialogue shot CLIP: hero.
 - Shot durations must add up exactly to the scene duration.
 - CLIP is still or hero. LIPSYNC is required when a visible character speaks, otherwise none.
@@ -51,7 +60,7 @@ SCENES
 - Optional ACTION: description | at: Ns
 - Dialogue: @id (emotion): "line" | at: Ns, narrator: @narrator [VO]: "line" | at: Ns
 - At most ONE spoken line per scene or shot, 2–7 words, so it fits the time. Every speaker must be in CAST. Every at: time + length must stay inside its scene/shot (shot times are relative to the shot).
-- Scenes 1 and 6 have TRANSITION (cut, fade 1s). Use no other syntax and no EPISODE blocks.
+- The first and last scenes have TRANSITION (cut, fade 1s); a scene before a location or time jump may also use fade 1s. Use no other syntax and no EPISODE blocks.
 
 EXAMPLE
 \`\`\`
