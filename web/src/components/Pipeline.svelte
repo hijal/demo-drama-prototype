@@ -134,6 +134,16 @@
     try {
       projects = (await api('/api/projects')).projects || []
       error = ''
+      // Reopen the last project (or the newest one) so the owner lands where they left off.
+      if (!projectId && projects.length) {
+        let last = ''
+        try {
+          last = localStorage.getItem(LAST_PROJECT) || ''
+        } catch {}
+        void choose(
+          projects.some((p) => p.id === last) ? last : projects[0].id,
+        )
+      }
     } catch (e) {
       error = message(e)
     }
@@ -161,8 +171,12 @@
       if (version === loadVersion) error = message(e)
     }
   }
+  const LAST_PROJECT = 'drama-pipeline:last-project'
   async function choose(selected: string) {
     projectId = selected
+    try {
+      if (selected) localStorage.setItem(LAST_PROJECT, selected)
+    } catch {}
     detail = null
     scriptId = ''
     draft = ''
@@ -258,6 +272,19 @@
         )
       else toast.success('Script uploaded and valid. Read it, then approve.')
     })
+  }
+  async function uploadNewProject(file: File | undefined) {
+    if (!file) return
+    const text = await file.text()
+    const name =
+      parseScript(text).header.TITLE?.trim() ||
+      file.name.replace(/\.[^.]+$/, '') ||
+      'New project'
+    await action(async () => {
+      const p = await api('/api/projects', { title: name.slice(0, 200) })
+      await choose(p.id)
+    })
+    if (projectId) await uploadScript(file)
   }
   async function approveAsset(asset: any, version: number) {
     await action(async () => {
@@ -399,6 +426,18 @@
         >{/if}
     </p>{/if}
   <div class="project-toolbar">
+    <label class="button primary upload-new"
+    >Upload new script (.txt)<input
+      type="file"
+      accept=".txt,text/plain"
+      class="visually-hidden"
+      aria-label="Upload a script as a new project"
+      onchange={(e) => {
+        void uploadNewProject(e.currentTarget.files?.[0])
+        e.currentTarget.value = ''
+      }}
+    /></label
+  >
     <label class="field"
       ><span>Project</span><select
         value={projectId}
@@ -437,7 +476,7 @@
       <div class="section-head">
         <h2>Script review</h2>
         <label class="button"
-          >Upload .txt<input
+          >Replace script (.txt)<input
             type="file"
             accept=".txt,text/plain"
             class="visually-hidden"
@@ -810,7 +849,11 @@
           .join('\n')}</pre>
     {/if}
   {:else}<div class="empty">
-      <h2>Start with a project</h2>
-      <p>Create a project, then upload your drama script.</p>
+      <h2>Start with your script</h2>
+      <p>
+        Press <strong>Upload new script (.txt)</strong> above. The project is
+        created and named from the script's TITLE. No script yet? Open
+        <strong>Format Script</strong> in the sidebar and use its AI prompt.
+      </p>
     </div>{/if}
 </div>

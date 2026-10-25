@@ -83,6 +83,8 @@
         if (disposed) return;
         if (capabilities.manual === false) {
           manual = false;
+          // The cloud studio has no ComfyUI; open the script-to-video projects.
+          tab = "pipeline";
         } else {
           controller = createVideoGeneration();
           stopGallery = startGallery();

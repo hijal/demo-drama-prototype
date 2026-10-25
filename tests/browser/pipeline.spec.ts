@@ -7,7 +7,8 @@ test("cloud studio preserves the original shell and project approval without cal
     scripts: any[] = [],
     uploads: any[] = [],
     approval: any = null,
-    approved = false;
+    approved = false,
+    createdTitle = "";
   const project = {
     id: "p1",
     title: "Delivery project",
@@ -24,6 +25,7 @@ test("cloud studio preserves the original shell and project approval without cal
     else if (path === "/api/status") data = { gpu: [] };
     else if (path === "/api/projects" && body) {
       created = true;
+      createdTitle = body.title;
       data = { id: "p1" };
     } else if (path === "/api/projects")
       data = { projects: created ? [project] : [] };
@@ -71,25 +73,24 @@ test("cloud studio preserves the original shell and project approval without cal
     await route.fulfill({ json: data });
   });
   await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Parameters", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Generate", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  // The cloud studio opens on Projects; the original Generate shell is still one click away.
   await expect(
     page.getByRole("heading", { name: "Drama pipeline" }),
   ).toBeVisible();
-  await page.getByLabel("New project title").fill("Delivery project");
-  await page.getByRole("button", { name: "Create project" }).click();
-  await page.getByLabel("Upload drama script").setInputFiles({
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Parameters", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  // One upload creates the project, named from the script TITLE, and saves the script.
+  await page.getByLabel("Upload a script as a new project").setInputFiles({
     name: "synthetic.txt",
     mimeType: "text/plain",
     buffer: Buffer.from(film),
   });
   // Upload saves at once and asks for repair, since the fixture has a W01 warning.
   await expect.poll(() => scripts.length).toBe(1);
+  expect(createdTitle).toBe(film.match(/^TITLE: (.*)$/m)![1]);
   expect(uploads[0].fix).toBe(true);
   await expect(page.getByText("If it looks right, press Approve script.")).toBeVisible();
   await page
