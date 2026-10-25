@@ -6,6 +6,7 @@
   import Queue from "./components/Queue.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import Pipeline from "./components/Pipeline.svelte";
+  import FormatScript from "./components/FormatScript.svelte";
   import { createVideoGeneration } from "@/lib/video-generation";
   import type { Notice } from "@/lib/notifications";
   import { startGallery } from "./lib/gallery";
@@ -13,7 +14,7 @@
   import { toast } from "@/lib/notifications";
   import { Toaster, toast as sonner } from "svelte-sonner";
   import { AlertTriangle, Download, X } from "lucide-svelte";
-  let tab = $state<"generate" | "gallery" | "pipeline">("generate");
+  let tab = $state<"generate" | "gallery" | "pipeline" | "format">("generate");
   let manual = $state(true);
   let capabilitiesReady = $state(false);
   let settings = $state(false);
@@ -167,6 +168,7 @@
           >
             <Pipeline />
           </div>{/if}
+        {#if tab === "format"}<FormatScript />{/if}
       {/if}
     </div>
     {#if manual}<Queue />{/if}

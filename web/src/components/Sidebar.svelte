@@ -7,6 +7,7 @@
     ChevronLeft,
     ChevronRight,
     PanelsTopLeft,
+    FileText,
   } from "lucide-svelte";
   let {
     onfree,
@@ -20,7 +21,7 @@
   }: {
     onfree: () => void;
     tab: string;
-    onnavigate: (tab: "generate" | "gallery" | "pipeline") => void;
+    onnavigate: (tab: "generate" | "gallery" | "pipeline" | "format") => void;
     onsettings: () => void;
     connected: boolean;
     checking?: boolean;
@@ -56,7 +57,7 @@
       </div>{/if}
   </div>
   <nav class="flex-1 py-3 px-2 space-y-1" aria-label="Main navigation">
-    {#each [{ id: "generate" as const, label: "Generate", icon: Clapperboard, color: "#06B6D4" }, { id: "gallery" as const, label: "Gallery", icon: FolderOpen, color: "#8B5CF6" }, ...(!manual ? [{ id: "pipeline" as const, label: "Projects", icon: PanelsTopLeft, color: "#06B6D4" }] : [])] as item}
+    {#each [{ id: "generate" as const, label: "Generate", icon: Clapperboard, color: "#06B6D4" }, { id: "gallery" as const, label: "Gallery", icon: FolderOpen, color: "#8B5CF6" }, ...(!manual ? [{ id: "pipeline" as const, label: "Projects", icon: PanelsTopLeft, color: "#06B6D4" }] : []), { id: "format" as const, label: "Format Script", icon: FileText, color: "#F59E0B" }] as item}
       <button
         aria-label={item.label}
         title={collapsed ? item.label : undefined}
