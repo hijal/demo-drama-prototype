@@ -92,7 +92,9 @@ test("cloud studio preserves the original shell and project approval without cal
   await expect.poll(() => scripts.length).toBe(1);
   expect(createdTitle).toBe(film.match(/^TITLE: (.*)$/m)![1]);
   expect(uploads[0].fix).toBe(true);
-  await expect(page.getByText("If it looks right, press Approve script.")).toBeVisible();
+  expect(uploads[0].autoApprove).toBe(true);
+  // The mock leaves the script unapproved, so the guide asks for the one manual click.
+  await expect(page.getByText("This script version is not approved yet.")).toBeVisible();
   await page
     .getByRole("button", { name: "Approve script", exact: true })
     .click();

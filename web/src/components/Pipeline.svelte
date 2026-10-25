@@ -38,7 +38,7 @@
     detail?.scenes?.filter((s: any) => s.episode_number === episode) || [],
   )
   const changes = $derived(diffLines(raw, draft))
-  // One plain next step for the owner, worked out from the project state.
+  // What is happening now, and the rare moment the owner must act. Everything else runs by itself.
   const guide = $derived.by(() => {
     if (!detail) return null
     const active = (type: string) =>
@@ -46,61 +46,63 @@
         (j: any) =>
           j.type === type && ['queued', 'claimed', 'running'].includes(j.status),
       ).length
-    const colab = gpuOnline ? '' : ' Start Colab (Run all) so it can work.'
+    const colab = gpuOnline ? '' : ' Start Colab (Run all) so it can continue.'
     if (!detail.scripts.length)
       return {
-        step: 'Step 1 of 4',
-        text: 'Upload your script (.txt). Need one? Open Format Script in the sidebar and use its AI prompt.',
+        step: 'Start',
+        text: 'Upload your script (.txt). Everything after that runs by itself. Need a script? Use Format Script in the sidebar.',
         tab: 'Script',
       }
     if (active('fix_script'))
       return {
         step: 'Working',
-        text: `Colab is fixing the script.${colab}`,
+        text: `Colab is fixing the script; it is approved automatically when no errors remain.${colab}`,
         tab: 'Script',
         busy: true,
       }
     if (detail.scripts[0].id !== detail.project.approved_script_id) {
       const errors = issues.filter((i: any) => i.severity === 'error').length
       return {
-        step: 'Step 2 of 4',
+        step: 'Needs you',
         text: errors
-          ? `${errors} error${errors === 1 ? '' : 's'} left in the script. Edit them on the right or press Repair again, then Approve script.`
-          : 'Read the fixed script on the right. If it looks right, press Approve script.',
+          ? `${errors} error${errors === 1 ? '' : 's'} could not be fixed automatically. Edit them on the right (or press Repair again), then Approve script.`
+          : 'This script version is not approved yet. Press Approve script.',
         tab: 'Script',
       }
     }
     const assets = detail.assets
-    const generating = assets.filter((a: any) => a.status === 'generating').length
-    const waiting = assets.filter(
-      (a: any) => a.approved_version === null && a.status === 'review',
-    ).length
-    if (waiting)
-      return {
-        step: 'Step 3 of 4',
-        text: `${waiting} reference${waiting === 1 ? '' : 's'} ready to check. Approve each one, or type a change and press Apply change.${generating ? ` ${generating} more still being created.` : ''}`,
-        tab: 'Cast & locations',
-      }
-    if (generating)
+    const pendingAssets = assets.filter((a: any) => a.approved_version === null)
+    if (active('asset'))
       return {
         step: 'Working',
-        text: `Colab is creating ${generating} reference${generating === 1 ? '' : 's'}.${colab}`,
+        text: `Colab is making and checking references: ${assets.length - pendingAssets.length} of ${assets.length} done.${colab}`,
         tab: 'Cast & locations',
         busy: true,
       }
-    const all = detail.scenes
-    const done = all.filter((sc: any) => sc.approved_clip_id).length
-    const check = detail.clips.filter((c: any) => c.status === 'review').length
-    if (check)
+    if (pendingAssets.length)
       return {
-        step: 'Step 4 of 4',
-        text: `${check} take${check === 1 ? '' : 's'} need your eye (QA was unsure). Watch, then Use this take or Regenerate with a note.`,
-        tab: 'Scenes',
+        step: 'Needs you',
+        text: `${pendingAssets.length} reference${pendingAssets.length === 1 ? '' : 's'} could not be made (Colab error). Press Generate reference on ${pendingAssets.length === 1 ? 'it' : 'them'}.`,
+        tab: 'Cast & locations',
       }
+    const all = detail.scenes
+    const selected = all.filter((sc: any) => sc.approved_clip_id).length
+    const below = all.filter((sc: any) => {
+      const take = detail.clips.find((c: any) => c.id === sc.approved_clip_id)
+      try {
+        const qa = JSON.parse(take?.qa_json || '{}')
+        return typeof qa.score === 'number' && !qa.pass
+      } catch {
+        return false
+      }
+    }).length
+    const weak = below
+      ? ` ${below} scene${below === 1 ? '' : 's'} stayed below the QA score after 3 tries; have a look when you can.`
+      : ''
     if (active('clip') || active('qa') || detail.project.auto_episode !== null)
       return {
         step: 'Working',
-        text: `Rendering scenes: ${done} of ${all.length} ready.${colab}`,
+        text: `Rendering and checking scenes: ${selected} of ${all.length} done.${weak}${colab}`,
         tab: 'Scenes',
         busy: true,
       }
@@ -111,22 +113,22 @@
         tab: 'Final',
         busy: true,
       }
+    if (selected < all.length)
+      return {
+        step: 'Needs you',
+        text: `Rendering stopped with ${all.length - selected} scene${all.length - selected === 1 ? '' : 's'} left (usually a Colab error or Stop). Press Resume rendering in Scenes.${colab}`,
+        tab: 'Scenes',
+      }
     if (detail.renders.some((r: any) => r.status === 'ready'))
       return {
         step: 'Done',
-        text: 'Your final video is ready to watch and download in Final.',
+        text: `Your final video is ready in Final.${weak}`,
         tab: 'Final',
       }
-    if (done)
-      return {
-        step: 'Step 4 of 4',
-        text: `${done} of ${all.length} scenes ready. Regenerate any you don't like, then press Make final video in Final.`,
-        tab: done === all.length ? 'Final' : 'Scenes',
-      }
     return {
-      step: 'Step 4 of 4',
-      text: 'References are approved. Press Render episode automatically in Scenes.',
-      tab: 'Scenes',
+      step: 'Ready',
+      text: `All ${all.length} scenes are done.${weak} Watch them, Regenerate any you dislike, then press Make final video.`,
+      tab: 'Final',
     }
   })
   const ast = $derived(parseScript(draft))
@@ -261,6 +263,7 @@
       const result = await api(`/api/projects/${projectId}/scripts`, {
         body: text,
         fix: problems > 0,
+        autoApprove: true,
       })
       draft = text
       raw = text
@@ -268,9 +271,11 @@
       scriptId = result.versionId
       if (problems)
         toast.success(
-          `Script uploaded. ${problems} problem${problems === 1 ? '' : 's'} found; Colab is fixing them.`,
+          `Script uploaded. Colab fixes ${problems} problem${problems === 1 ? '' : 's'}, then everything continues by itself.`,
         )
-      else toast.success('Script uploaded and valid. Read it, then approve.')
+      else if (result.approved)
+        toast.success('Script uploaded and approved. Colab now makes the references.')
+      else toast.success('Script uploaded.')
     })
   }
   async function uploadNewProject(file: File | undefined) {
@@ -366,7 +371,7 @@
                 <div class="section-head">
                   <strong>Take {take.take}</strong><span class="badge"
                     >{scene.approved_clip_id === take.id
-                      ? 'Approved'
+                      ? 'Selected'
                       : take.status}</span
                   >
                 </div>
@@ -374,15 +379,41 @@
                     controls
                     preload={primary ? 'metadata' : 'none'}
                     src={media(take.r2_key)}><track kind="captions" /></video
-                  >{/if}{#if take.qa_json}{@const qa = JSON.parse(take.qa_json)}
-                  <div class="qa-report">
+                  >{/if}{#if take.qa_json}{@const qa = JSON.parse(take.qa_json)}{@const params =
+                    JSON.parse(take.params_json || '{}')}
+                  <div
+                    class="qa-report"
+                    class:below={typeof qa.score === 'number' && !qa.pass}
+                  >
                     <strong
-                      >{qa.pass
-                        ? 'QA passed'
-                        : qa.needsOwnerReview
-                          ? 'Owner check required'
+                      >{typeof qa.score === 'number'
+                        ? `QA ${qa.score}%${qa.pass ? '' : ` · below ${qa.threshold}%`}`
+                        : qa.pass
+                          ? 'QA passed'
                           : 'QA flagged issues'}</strong
-                    >{#each qa.issues || [] as issue}<p>{issue}</p>{/each}
+                    >{#if params.appliedChanges}<p class="applied">
+                        Changed for this take: {params.appliedChanges}
+                      </p>{/if}{#each qa.issues || [] as issue}<p>{issue}</p>{/each}
+                    {#if qa.checks?.length}<details>
+                        <summary>Script vs video</summary>
+                        <table class="qa-checks">
+                          <thead
+                            ><tr
+                              ><th>Check</th><th>Script wants</th><th
+                                >Video shows</th
+                              ><th>Score</th></tr
+                            ></thead
+                          >
+                          <tbody
+                            >{#each qa.checks as check}<tr
+                                ><td>{check.name}</td><td>{check.expected}</td><td
+                                  >{check.observed}</td
+                                ><td>{check.score}%</td></tr
+                              >{/each}</tbody
+                          >
+                        </table>
+                        {#each qa.notes || [] as note}<small>{note}</small>{/each}
+                      </details>{/if}
                   </div>{/if}{#if scene.approved_clip_id !== take.id}<button
                   disabled={busy || !['ready', 'review'].includes(take.status)}
                   onclick={() =>
@@ -586,7 +617,16 @@
               >@{asset.ref} · {asset.kind}{asset.approved_version
                 ? ` · approved v${asset.approved_version}`
                 : ''}</small
-            >{#if files.sheet}<a
+            >{#if files.qa}<div
+                class="qa-report"
+                class:below={files.qa.score < files.qa.threshold}
+              >
+                <strong
+                  >QA {files.qa.score}%{files.qa.score < files.qa.threshold
+                    ? ` · below ${files.qa.threshold}%, best of the retries`
+                    : ''}</strong
+                >{#each files.qa.issues as issue}<p>{issue}</p>{/each}
+              </div>{/if}{#if files.sheet}<a
                 href={media(files.sheet)}
                 target="_blank"
                 rel="noreferrer"
@@ -622,7 +662,7 @@
                   action(async () => {
                     await api(
                       `/api/projects/${projectId}/assets/${encodeURIComponent(asset.id)}/generate`,
-                      { instruction: assetNotes[asset.id] },
+                      { instruction: assetNotes[asset.id], auto: true },
                     )
                     assetNotes[asset.id] = ''
                   })}>Apply change</button
@@ -633,7 +673,7 @@
                   action(() =>
                     api(
                       `/api/projects/${projectId}/assets/${encodeURIComponent(asset.id)}/generate`,
-                      { instruction: '' },
+                      { instruction: '', auto: true },
                     ),
                   )}
                 >{latestVersion ? 'Recreate fully' : 'Generate reference'}</button
@@ -684,7 +724,7 @@
           disabled={busy || !scenes.length}
           onclick={() =>
             action(() => api(`/api/projects/${projectId}/render`, { episode }))}
-          >Render episode automatically</button
+          >Resume rendering</button
         ><button
           disabled={busy}
           onclick={() =>

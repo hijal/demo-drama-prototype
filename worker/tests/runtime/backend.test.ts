@@ -579,20 +579,51 @@ test("idle heartbeat cannot indefinitely renew a claim whose response the GPU lo
   ).toBe(lease);
   await request(`/api/projects/${p.id}/jobs/${job.id}/cancel`, {});
 });
-test("low-effort flow: series repair chains episodes, approval queues references, cast approval starts rendering", async () => {
+test("hands-off flow: upload auto-repairs and approves, references and scenes approve themselves by QA score", async () => {
   const series = await readFile("../docs/templates/series_template.txt", "utf8");
   // Both episodes miss CAMERA, so both need the LLM.
   const broken = series.replace(/^ {2}CAMERA: .*\n/gm, "");
   const [shared, episode2] = series.split(/(?=== EPISODE 02)/);
   const head = shared.split(/(?=== EPISODE 01)/)[0];
   const p = await project();
-  await request(`/api/projects/${p.id}/scripts`, { body: broken, fix: true });
-  async function claim() {
+  const worker = "flow-" + crypto.randomUUID();
+  await request(
+    "/api/gpu/heartbeat",
+    { workerId: worker, info: {} },
+    "POST",
+    gpu,
+  );
+  const upload = (await (
+    await request(`/api/projects/${p.id}/scripts`, {
+      body: broken,
+      fix: true,
+      autoApprove: true,
+    })
+  ).json()) as any;
+  expect(upload.approved).toBe(false);
+  async function claim(id = worker) {
     return (
       (await (
-        await request("/api/gpu/claim", { workerId: "flow" }, "POST", gpu)
+        await request("/api/gpu/claim", { workerId: id }, "POST", gpu)
       ).json()) as any
     ).job;
+  }
+  async function put(job: any, name: string) {
+    return (
+      (await (
+        await mf.dispatchFetch(
+          `http://studio.test/api/gpu/jobs/${job.id}/files/${name}`,
+          {
+            method: "PUT",
+            headers: {
+              "X-GPU-Key": "test-gpu-secret",
+              "X-Claim-Token": job.claim_token,
+            },
+            body: "synthetic-media-bytes",
+          },
+        )
+      ).json()) as any
+    ).key;
   }
   async function done(job: any, result: unknown) {
     const response = await request(
@@ -603,56 +634,32 @@ test("low-effort flow: series repair chains episodes, approval queues references
     );
     expect(response.status, await response.text()).toBe(200);
   }
+  const detailOf = async () =>
+    (await (await request(`/api/projects/${p.id}`)).json()) as any;
+
   const first = await claim();
   expect(first.payload.episode).toBe(1);
   expect(first.payload.remaining).toEqual([2]);
-  expect(first.payload.body).not.toContain("EPISODE 02");
   await done(first, { script: shared });
   const second = await claim();
   expect(second.payload.episode).toBe(2);
   expect(second.payload.rawVersion).toBe(`fixed:${first.id}`);
-  expect(second.payload.body).not.toContain("CAMERA: slow push-in");
   await done(second, { script: head + episode2 });
-  let detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
-  const fixed = detail.scripts[0];
-  expect(fixed.id).toBe(`fixed:${second.id}`);
-  expect(JSON.parse(fixed.report_json).issues).toEqual([]);
-  expect(fixed.body).toContain("CAMERA: static medium shot");
-  expect(fixed.body).toContain("CAMERA: slow push-in");
-  expect(await claim()).toBeNull();
-
-  await request(`/api/projects/${p.id}/approve-script`, {
-    versionId: fixed.id,
-    revision: detail.project.revision,
-    generateAssets: true,
-  });
-  detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
+  // No errors remain, so the script approved itself and every reference started.
+  let detail = await detailOf();
+  expect(detail.project.approved_script_id).toBe(`fixed:${second.id}`);
   expect(detail.assets.every((a: any) => a.status === "generating")).toBe(true);
+
   for (let i = 0; i < detail.assets.length; i++) {
     const job = await claim();
     expect(job.type).toBe("asset");
-    const put = async (name: string) =>
-      (
-        (await (
-          await mf.dispatchFetch(
-            `http://studio.test/api/gpu/jobs/${job.id}/files/${name}`,
-            {
-              method: "PUT",
-              headers: {
-                "X-GPU-Key": "test-gpu-secret",
-                "X-Claim-Token": job.claim_token,
-              },
-              body: "synthetic-media-bytes",
-            },
-          )
-        ).json()) as any
-      ).key;
-    const image = await put("sheet.png");
+    expect(job.payload.autoApprove).toBe(true);
+    const image = await put(job, "sheet.png");
     await done(job, {
       files: {
         sheet: image,
         front: image,
-        voice: await put("voice.wav"),
+        voice: await put(job, "voice.wav"),
         ...Object.fromEntries(
           (job.payload.spec.variants || []).map((_: unknown, n: number) => [
             `variant_${n}`,
@@ -660,20 +667,69 @@ test("low-effort flow: series repair chains episodes, approval queues references
           ]),
         ),
       },
+      qa: { score: 81, threshold: 75, issues: [], observed: "", prompt_changes: "" },
     });
   }
-  const started: boolean[] = [];
-  for (const asset of detail.assets) {
-    const response = await request(
-      `/api/projects/${p.id}/assets/${encodeURIComponent(asset.id)}/approve`,
-      { version: 1, autoRender: true },
-    );
-    started.push(((await response.json()) as any).renderStarted);
-  }
-  expect(started).toEqual([false, false, true]);
-  const clip = await claim();
-  expect(clip.type).toBe("clip");
-  expect(clip.payload.sceneId).toContain(":ep1:s1");
-  detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
+  // References approved themselves; rendering of episode 1 started on its own.
+  detail = await detailOf();
+  expect(detail.assets.every((a: any) => a.approved_version === 1)).toBe(true);
+  expect(JSON.parse(detail.assetVersions[0].files_json).qa.score).toBe(81);
   expect(detail.project.auto_episode).toBe(1);
+
+  // A power cut: the claiming runtime dies; a new runtime takes the job back at once.
+  const lost = await claim("dead-runtime");
+  expect(lost.type).toBe("clip");
+  // Its last heartbeat and claim are older than a minute.
+  await (await mf.getD1Database("DB"))
+    .prepare("UPDATE jobs SET claimed_at=claimed_at-120000 WHERE id=?")
+    .bind(lost.id)
+    .run();
+  const resumed = await claim();
+  expect(resumed.id).toBe(lost.id);
+  expect(resumed.attempt).toBe(lost.attempt);
+
+  // Scene QA below 75% three times: retakes carry QA's prompt changes, then the best take is selected.
+  let clipJob = resumed;
+  const scores = [60, 72, 55, 64];
+  for (let i = 0; i < scores.length; i++) {
+    expect(clipJob.type).toBe("clip");
+    expect(clipJob.payload.retake).toBe(i);
+    if (i) expect(clipJob.payload.hint).toBe(`fix ${i - 1}`);
+    await done(clipJob, { key: await put(clipJob, "clip.mp4"), prompt: "p" });
+    const qa = await claim();
+    expect(qa.type).toBe("qa");
+    await done(qa, {
+      score: scores[i],
+      threshold: 75,
+      pass: false,
+      issues: ["face cut off"],
+      fix_hint: `fix ${i}`,
+      words: [],
+      alignedLines: [],
+    });
+    clipJob = await claim();
+  }
+  detail = await detailOf();
+  const ep1 = detail.scenes.find((s: any) => s.episode_number === 1);
+  const chosen = detail.clips.find((c: any) => c.id === ep1.approved_clip_id);
+  expect(JSON.parse(chosen.qa_json).score).toBe(72);
+  expect(JSON.parse(chosen.params_json).appliedChanges).toBe("fix 0");
+  // Episode 1 is done, so episode 2 continues without a click.
+  expect(clipJob.type).toBe("clip");
+  expect(clipJob.payload.sceneId).toContain(":ep2:s1");
+  await done(clipJob, { key: await put(clipJob, "clip.mp4"), prompt: "p" });
+  const passing = await claim();
+  await done(passing, {
+    score: 88,
+    threshold: 75,
+    pass: true,
+    issues: [],
+    fix_hint: "",
+    words: [],
+    alignedLines: [],
+  });
+  detail = await detailOf();
+  expect(detail.scenes.every((s: any) => s.approved_clip_id)).toBe(true);
+  expect(detail.project.auto_episode).toBeNull();
+  expect(await claim()).toBeNull();
 });

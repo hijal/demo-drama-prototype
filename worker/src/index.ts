@@ -7,6 +7,7 @@ import {
   getProject,
   enqueue,
   expireLeases,
+  releaseDeadWorkers,
   cleanupUploads,
   reconcileTerminalJobs,
   assert,
@@ -22,7 +23,8 @@ import {
   approveScript,
   queueClip,
   scheduleNext,
-  startWhenCastReady,
+  resumeRendering,
+  approveAssetVersion,
 } from "./planning";
 import { faithfulness } from "./llm/fixer";
 import { serializeScript } from "./script/serialize";
@@ -67,6 +69,7 @@ async function body(request: Request) {
     throw new HttpError(400, "Invalid JSON");
   }
 }
+const MAX_AUTO_RETAKES = 3;
 function mediaKey(
   projectId: string,
   jobId: string,
@@ -128,6 +131,7 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       400,
       "Worker ID required",
     );
+    await releaseDeadWorkers(env, data.workerId);
     await expireLeases(env);
     await cleanupUploads(env);
     const job = await query(
@@ -412,7 +416,11 @@ async function gpu(request: Request, env: Env, parts: string[]) {
         jobId,
         payload.assetId,
         payload.version,
-        json(result.files),
+        json(
+          result.qa && typeof result.qa === "object"
+            ? { ...result.files, qa: result.qa }
+            : result.files,
+        ),
         payload.instruction || "",
         payload.scriptVersion,
         now(),
@@ -443,6 +451,8 @@ async function gpu(request: Request, env: Env, parts: string[]) {
         json({
           ...result.params,
           sceneHash: payload.sceneHash,
+          retake: payload.retake || 0,
+          appliedChanges: payload.hint || "",
           contextLatents:
             result.files?.contextLow && result.files?.contextHigh
               ? { low: result.files.contextLow, high: result.files.contextHigh }
@@ -478,7 +488,7 @@ async function gpu(request: Request, env: Env, parts: string[]) {
         env,
         `UPDATE clips SET qa_json=?,status=CASE WHEN status='stale' THEN 'stale' WHEN ? THEN 'ready' ELSE 'review' END WHERE id=? AND ${guard}`,
         json(result),
-        result.pass && !result.needsOwnerReview ? 1 : 0,
+        result.pass ? 1 : 0,
         payload.clipId,
         ...args,
       ),
@@ -523,30 +533,54 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       result.script,
       `fixed:${jobId}`,
       payload.remaining,
+      !!payload.autoApprove,
     );
-  if (job.type === "qa") {
-    if (result.pass && !result.needsOwnerReview) {
-      try {
-        await approveClip(env, job.project_id, payload.clipId);
-        await scheduleNext(env, job.project_id);
-      } catch (error) {
-        if (!(error instanceof HttpError && error.status === 409)) throw error;
-      }
-    } else if (!result.needsOwnerReview && (payload.retake || 0) < 2)
-      await queueClip(
+  if (job.type === "fix_script" && !payload.remaining?.length && payload.autoApprove)
+    await autoApproveScript(env, job.project_id, `fixed:${jobId}`);
+  if (job.type === "asset" && payload.autoApprove) {
+    try {
+      await approveAssetVersion(
         env,
         job.project_id,
-        payload.sceneId,
-        payload.note || "",
-        String(result.fix_hint || ""),
-        (payload.retake || 0) + 1,
+        payload.assetId,
+        payload.version,
       );
-    else
-      await query(
-        env,
-        "UPDATE projects SET auto_episode=NULL WHERE id=?",
-        job.project_id,
-      ).run();
+      await resumeRendering(env, job.project_id);
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 409)) throw error;
+    }
+  }
+  if (job.type === "qa") {
+    // Owner request: QA decides. A take at or above the score threshold is
+    // selected; below it, a new take with QA's prompt changes, up to three
+    // times; then the best-scoring take is selected and rendering moves on.
+    const retake = payload.retake || 0;
+    try {
+      if (result.pass)
+        await approveClip(env, job.project_id, payload.clipId);
+      else if (retake < MAX_AUTO_RETAKES) {
+        await queueClip(
+          env,
+          job.project_id,
+          payload.sceneId,
+          payload.note || "",
+          String(result.fix_hint || ""),
+          retake + 1,
+        );
+        return ok({ ok: true });
+      } else {
+        const best = await one(
+          env,
+          "SELECT c.id FROM clips c JOIN projects p ON p.id=? WHERE c.scene_id=? AND c.script_version_id=p.approved_script_id AND c.r2_key IS NOT NULL AND c.status IN ('ready','review') ORDER BY COALESCE(json_extract(c.qa_json,'$.score'),0) DESC,c.take DESC LIMIT 1",
+          job.project_id,
+          payload.sceneId,
+        );
+        if (best) await approveClip(env, job.project_id, best.id);
+      }
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 409)) throw error;
+    }
+    await scheduleNext(env, job.project_id);
   }
   return ok({ ok: true });
 }
@@ -555,6 +589,7 @@ async function queueAsset(
   project: Record<string, any>,
   asset: Record<string, any>,
   instruction: string,
+  autoApprove = false,
 ) {
   const projectId = project.id;
   const active = await one(
@@ -586,6 +621,7 @@ async function queueAsset(
     instruction: instruction.slice(0, 2000),
     previous: previous ? JSON.parse(previous.files_json) : null,
     scriptVersion: project.approved_script_id,
+    autoApprove,
   });
   await query(
     env,
@@ -600,6 +636,7 @@ async function queueRepair(
   body: string,
   rawVersion: string,
   episodes: Array<number | null>,
+  autoApprove = false,
 ) {
   const [episode, ...remaining] = episodes;
   let input = body;
@@ -615,7 +652,45 @@ async function queueRepair(
     rawVersion,
     episode,
     remaining,
+    autoApprove,
   });
+}
+/** Queue a reference for every asset with no version for the approved script. */
+async function queueMissingAssets(
+  env: Env,
+  projectId: string,
+  autoApprove: boolean,
+) {
+  const project = await getProject(env, projectId);
+  const missing = await all(
+    env,
+    "SELECT * FROM assets a WHERE project_id=? AND approved_version IS NULL AND status!='generating' AND NOT EXISTS (SELECT 1 FROM asset_versions v WHERE v.asset_id=a.id AND v.script_version_id=?) ORDER BY kind,name",
+    projectId,
+    project.approved_script_id,
+  );
+  for (const asset of missing)
+    await queueAsset(env, project, asset, "", autoApprove);
+}
+/**
+ * Owner request: no approval clicks. A script version with no validation
+ * errors is approved as soon as it is the newest one, and its references start.
+ */
+async function autoApproveScript(env: Env, projectId: string, versionId: string) {
+  const latest = await one(
+    env,
+    "SELECT id FROM script_versions WHERE project_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+    projectId,
+  );
+  if (latest?.id !== versionId) return false;
+  const project = await getProject(env, projectId);
+  try {
+    await approveScript(env, projectId, versionId, project.revision);
+  } catch (error) {
+    if (error instanceof HttpError) return false;
+    throw error;
+  }
+  await queueMissingAssets(env, projectId, true);
+  return true;
 }
 /** Episodes with an issue inside them; script-wide issues (cast, header) go with the first episode. */
 function episodesNeedingRepair(ast: Script, issues: Issue[]) {
@@ -761,9 +836,20 @@ async function owner(request: Request, env: Env, parts: string[]) {
             : episodesNeedingRepair(ast, issues)
           : [null];
       if (episodes.length)
-        jobId = await queueRepair(env, projectId, data.body, versionId, episodes);
+        jobId = await queueRepair(
+          env,
+          projectId,
+          data.body,
+          versionId,
+          episodes,
+          !!data.autoApprove,
+        );
     }
-    return ok({ versionId, jobId, issues }, 201);
+    const approved =
+      !jobId && data.autoApprove
+        ? await autoApproveScript(env, projectId, versionId)
+        : false;
+    return ok({ versionId, jobId, issues, approved }, 201);
   }
   if (parts[2] === "approve-script") {
     const approved = await approveScript(
@@ -772,17 +858,8 @@ async function owner(request: Request, env: Env, parts: string[]) {
       String(data.versionId || ""),
       Number(data.revision),
     );
-    // The studio asks for every missing reference right away, so the owner only reviews.
-    if (data.generateAssets) {
-      const current = await getProject(env, projectId);
-      const missing = await all(
-        env,
-        "SELECT * FROM assets a WHERE project_id=? AND approved_version IS NULL AND status!='generating' AND NOT EXISTS (SELECT 1 FROM asset_versions v WHERE v.asset_id=a.id AND v.script_version_id=?) ORDER BY kind,name",
-        projectId,
-        current.approved_script_id,
-      );
-      for (const asset of missing) await queueAsset(env, current, asset, "");
-    }
+    // The studio asks for every missing reference right away; they approve themselves after QA.
+    if (data.generateAssets) await queueMissingAssets(env, projectId, true);
     return ok(approved);
   }
   if (parts[2] === "assets") {
@@ -794,37 +871,11 @@ async function owner(request: Request, env: Env, parts: string[]) {
     );
     assert(asset, 404, "Asset not found");
     if (parts[4] === "approve") {
-      const version = await one(
-        env,
-        "SELECT * FROM asset_versions WHERE asset_id=? AND version=?",
-        asset.id,
-        Number(data.version),
-      );
-      assert(
-        version && version.script_version_id === project.approved_script_id,
-        409,
-        "Asset version belongs to an older script",
-      );
-      await env.DB.batch([
-        query(
-          env,
-          "UPDATE assets SET approved_version=?,status='approved' WHERE id=?",
-          version.version,
-          asset.id,
-        ),
-        query(
-          env,
-          "UPDATE clips SET status='stale' WHERE EXISTS (SELECT 1 FROM json_each(clips.asset_versions_json) p WHERE p.key=? AND p.value!=?)",
-          asset.id,
-          version.version,
-        ),
-        query(env, invalidateDependentClipsSQL),
-        query(env, invalidateRendersSQL),
-      ]);
+      await approveAssetVersion(env, projectId, asset.id, Number(data.version));
       return ok({
         ok: true,
         renderStarted: data.autoRender
-          ? await startWhenCastReady(env, projectId)
+          ? await resumeRendering(env, projectId)
           : false,
       });
     }
@@ -834,7 +885,13 @@ async function owner(request: Request, env: Env, parts: string[]) {
       "Approve the script first",
     );
     return ok({
-      jobId: await queueAsset(env, project, asset, String(data.instruction || "")),
+      jobId: await queueAsset(
+        env,
+        project,
+        asset,
+        String(data.instruction || ""),
+        !!data.auto,
+      ),
     });
   }
   if (parts[2] === "scenes") {

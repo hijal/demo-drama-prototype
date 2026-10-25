@@ -319,52 +319,51 @@ export async function scheduleNext(env: Env, projectId: string) {
     projectId,
   );
   if (active) return;
+  // A scene needs a take when none is selected or the selected one went stale.
+  // QA always selects a take (the best one after the auto retakes), so a scene is never retried forever.
   const next = await one(
     env,
-    "SELECT s.id FROM scenes s JOIN episodes e ON e.id=s.episode_id LEFT JOIN clips c ON c.id=s.approved_clip_id WHERE e.project_id=? AND e.number=? AND s.script_version_id=? AND (s.approved_clip_id IS NULL OR c.status!='ready') ORDER BY s.number LIMIT 1",
+    "SELECT s.id FROM scenes s JOIN episodes e ON e.id=s.episode_id LEFT JOIN clips c ON c.id=s.approved_clip_id WHERE e.project_id=? AND e.number=? AND s.script_version_id=? AND (s.approved_clip_id IS NULL OR c.status='stale') ORDER BY s.number LIMIT 1",
     projectId,
     p.auto_episode,
     p.approved_script_id,
   );
-  if (next) await queueClip(env, projectId, next.id);
-  else
-    await query(
-      env,
-      "UPDATE projects SET auto_episode=NULL WHERE id=?",
-      projectId,
-    ).run();
+  if (next) {
+    await queueClip(env, projectId, next.id);
+    return;
+  }
+  await query(
+    env,
+    "UPDATE projects SET auto_episode=NULL WHERE id=?",
+    projectId,
+  ).run();
+  // Owner request: no clicks between episodes; continue with the next one that is ready.
+  await resumeRendering(env, projectId);
 }
 /**
- * Start rendering the first episode once every reference its scenes need is
- * approved, so the owner does not have to press Render. Only the first time:
- * nothing happens when takes already exist for the approved script.
+ * Start (or continue) automatic rendering with the first episode that still
+ * has scenes without a current take and whose references are all approved.
  */
-export async function startWhenCastReady(env: Env, projectId: string) {
+export async function resumeRendering(env: Env, projectId: string) {
   const p = await getProject(env, projectId);
   if (!p.approved_script_id || p.auto_episode !== null) return false;
-  const started = await one(
+  const pending = await all(
     env,
-    "SELECT c.id FROM clips c JOIN scenes s ON s.id=c.scene_id JOIN episodes e ON e.id=s.episode_id WHERE e.project_id=? AND c.script_version_id=? LIMIT 1",
+    "SELECT s.spec_json,e.number episode FROM scenes s JOIN episodes e ON e.id=s.episode_id LEFT JOIN clips c ON c.id=s.approved_clip_id WHERE e.project_id=? AND s.script_version_id=? AND (s.approved_clip_id IS NULL OR c.status='stale') ORDER BY e.number,s.number",
     projectId,
     p.approved_script_id,
   );
-  if (started) return false;
-  const scenes = await all(
-    env,
-    "SELECT s.spec_json,e.number episode FROM scenes s JOIN episodes e ON e.id=s.episode_id WHERE e.project_id=? AND s.script_version_id=? AND e.number=(SELECT MIN(e2.number) FROM episodes e2 JOIN scenes s2 ON s2.episode_id=e2.id WHERE e2.project_id=? AND s2.script_version_id=?)",
-    projectId,
-    p.approved_script_id,
-    projectId,
-    p.approved_script_id,
-  );
-  if (!scenes.length) return false;
-  const needed = new Set(
-    scenes.flatMap((s) => references(JSON.parse(s.spec_json) as Scene)),
-  );
+  if (!pending.length) return false;
   const assets = await all(
     env,
     "SELECT ref,approved_version FROM assets WHERE project_id=?",
     projectId,
+  );
+  const first = pending[0].episode;
+  const needed = new Set(
+    pending
+      .filter((s) => s.episode === first)
+      .flatMap((s) => references(JSON.parse(s.spec_json) as Scene)),
   );
   const ready = assets
     .filter((a) => needed.has(a.ref) || needed.has(a.ref + "s"))
@@ -372,10 +371,47 @@ export async function startWhenCastReady(env: Env, projectId: string) {
   if (!ready) return false;
   await query(
     env,
-    "UPDATE projects SET auto_episode=? WHERE id=?",
-    scenes[0].episode,
+    "UPDATE projects SET auto_episode=? WHERE id=? AND auto_episode IS NULL",
+    first,
     projectId,
   ).run();
   await scheduleNext(env, projectId);
   return true;
+}
+/** Approve one reference version and mark takes built from another version stale. */
+export async function approveAssetVersion(
+  env: Env,
+  projectId: string,
+  assetId: string,
+  versionNumber: number,
+) {
+  const project = await getProject(env, projectId);
+  const version = await one(
+    env,
+    "SELECT v.* FROM asset_versions v JOIN assets a ON a.id=v.asset_id WHERE v.asset_id=? AND v.version=? AND a.project_id=?",
+    assetId,
+    versionNumber,
+    projectId,
+  );
+  assert(
+    version && version.script_version_id === project.approved_script_id,
+    409,
+    "Asset version belongs to an older script",
+  );
+  await env.DB.batch([
+    query(
+      env,
+      "UPDATE assets SET approved_version=?,status='approved' WHERE id=?",
+      version.version,
+      assetId,
+    ),
+    query(
+      env,
+      "UPDATE clips SET status='stale' WHERE EXISTS (SELECT 1 FROM json_each(clips.asset_versions_json) p WHERE p.key=? AND p.value!=?)",
+      assetId,
+      version.version,
+    ),
+    query(env, invalidateDependentClipsSQL),
+    query(env, invalidateRendersSQL),
+  ]);
 }

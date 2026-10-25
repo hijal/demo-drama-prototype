@@ -31,6 +31,8 @@ CONTINUITY_STRATEGY = "reference-video" #@param ["reference-video", "latent"]
 IDLE_MINUTES = 20 #@param {type:"integer"}
 RENDER_QUALITY = "1080p" #@param ["1080p", "720p"]
 # 720p renders faster for testing the pipeline; final films use 1080p.
+QA_MIN_SCORE = 75 #@param {type:"slider", min:50, max:95, step:5}
+# QA approves a reference or scene at this score (%); below it, it retries up to 3 times and keeps the best.
 TIMEZONE = "Asia/Dhaka" #@param {type:"string"}
 # Log times use this zone; Colab itself runs on UTC.
 os.environ["TZ"] = TIMEZONE
@@ -57,6 +59,7 @@ os.environ["COLAB_LLM_MODEL"] = COLAB_LLM_MODEL
 os.environ["IDLE_MINUTES"] = str(IDLE_MINUTES)
 os.environ["CONTINUITY_STRATEGY"] = CONTINUITY_STRATEGY
 os.environ["RENDER_SHORT_SIDE"] = RENDER_QUALITY.rstrip("p")
+os.environ["QA_MIN_SCORE"] = str(QA_MIN_SCORE)
 # Validate the remote GPU key/bypass before installing the second model environment.
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):

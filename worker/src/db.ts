@@ -67,6 +67,23 @@ export async function enqueue(
   ).run();
   return jobId;
 }
+/**
+ * A Colab runtime that stopped (power cut, closed tab, deleted runtime) stops
+ * heartbeating. Hand its jobs back as soon as another worker asks for work,
+ * instead of waiting for the 10-minute lease. An interruption is not counted
+ * as a failure; finished results are already in D1/R2 and are never redone.
+ */
+export async function releaseDeadWorkers(env: Env, workerId: string) {
+  const time = now();
+  await query(
+    env,
+    "UPDATE jobs SET status='queued',error='Colab stopped during this job; resumed on the next runtime',claim_token=NULL,claimed_by=NULL,lease_until=NULL,attempt=MAX(attempt-1,0),updated_at=? WHERE status IN ('claimed','running') AND claimed_by!=? AND claimed_at<? AND NOT EXISTS (SELECT 1 FROM gpu_workers w WHERE w.id=jobs.claimed_by AND w.last_seen>?)",
+    time,
+    workerId,
+    time - 60000,
+    time - 60000,
+  ).run();
+}
 export async function expireLeases(env: Env) {
   const time = now();
   await query(

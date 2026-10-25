@@ -1337,6 +1337,33 @@
     margin: 12px 0;
     font-size: 11px;
   }
+  .qa-report > strong {
+    color: #34d399;
+  }
+  .qa-report.below {
+    border-color: #f59e0b55;
+  }
+  .qa-report.below > strong {
+    color: #fbbf24;
+  }
+  .qa-report .applied {
+    color: var(--accent);
+  }
+  .qa-checks {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+  }
+  .qa-checks th,
+  .qa-checks td {
+    text-align: left;
+    vertical-align: top;
+    padding: 4px 6px;
+    border-top: 1px solid var(--border);
+  }
+  .qa-checks td:last-child {
+    white-space: nowrap;
+  }
   .final-render {
     margin-top: 22px;
   }
