@@ -4,6 +4,7 @@ import gc
 import io
 import json
 import os
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -64,6 +65,18 @@ def local_file(name):
     if ROOT not in path.parents or not path.is_file():
         raise ValueError("File must exist inside PIPELINE_WORK_DIR")
     return path
+
+
+def load_audio(path):
+    """16 kHz mono float32 via ffmpeg. Colab's system PyAV (19.x) rejects the
+    metadata_errors argument faster-whisper passes, so audio is never decoded
+    through PyAV or torchaudio backends."""
+    import numpy
+    out = subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-vn", "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return numpy.frombuffer(out, dtype=numpy.float32).copy()
 
 
 class Runtime:
@@ -129,18 +142,26 @@ class Runtime:
             return {"image": encode_image(image)}
 
     def transcribe(self, request):
-        from faster_whisper import WhisperModel
+        # transformers Whisper runs on the runtime's own torch build; faster-whisper's
+        # ctranslate2 needs CUDA 12 libraries (libcublas.so.12) that Colab's CUDA 13 image lacks.
+        import torch
+        from transformers import pipeline
         with self.lock:
-            self.release()
-            self.model = WhisperModel("large-v3", device="cuda", compute_type="float16")
-            self.loaded = "whisper"
-            segments, info = self.model.transcribe(str(local_file(request["file"])), word_timestamps=True, beam_size=5, vad_filter=True)
-            words = [{"word": word.word.strip(), "start": word.start, "end": word.end} for segment in segments for word in (segment.words or [])]
-            return {"words": words, "language": info.language}
+            if self.loaded != "whisper":
+                self.release()
+                self.model = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3", dtype=torch.float16, device="cuda")
+                self.loaded = "whisper"
+            audio = load_audio(local_file(request["file"]))
+            result = self.model({"raw": audio, "sampling_rate": 16000}, return_timestamps="word", chunk_length_s=30)
+            words = [
+                {"word": chunk["text"].strip(), "start": chunk["timestamp"][0], "end": chunk["timestamp"][1]}
+                for chunk in result.get("chunks", [])
+                if chunk["text"].strip() and chunk["timestamp"][0] is not None
+            ]
+            return {"words": words}
 
     def voice(self, request):
         import torch
-        import torchaudio
         from speechbrain.inference.speaker import EncoderClassifier
         with self.lock:
             if self.loaded != "voice":
@@ -148,9 +169,7 @@ class Runtime:
                 self.model = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir=str(ROOT / "voice-model"), run_opts={"device": "cuda"})
                 self.loaded = "voice"
             def embed(filename):
-                waveform, rate = torchaudio.load(str(local_file(filename)))
-                waveform = waveform.mean(dim=0, keepdim=True)
-                waveform = torchaudio.functional.resample(waveform, rate, 16000)
+                waveform = torch.from_numpy(load_audio(local_file(filename))).unsqueeze(0)
                 if waveform.shape[-1] < 16000:
                     raise ValueError("Voice segment must contain at least one second")
                 with torch.inference_mode():
