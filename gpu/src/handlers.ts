@@ -64,12 +64,24 @@ async function chat(
     throw new Error("Model output truncated");
   return result.choices?.[0]?.message?.content as string;
 }
-function structured(text: string) {
+export function structured(text: string) {
+  // Qwen3 models may emit a <think>…</think> block or prose around the JSON.
+  const cleaned = text
+    .replace(/<think>[\s\S]*?<\/think>/g, "")
+    .trim()
+    .replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1");
   try {
-    return JSON.parse(
-      text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1"),
-    );
+    return JSON.parse(cleaned);
   } catch {
+    const start = cleaned.indexOf("{"),
+      end = cleaned.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1));
+      } catch {
+        /* fall through */
+      }
+    }
     throw new Error("Local model did not return valid structured JSON");
   }
 }
