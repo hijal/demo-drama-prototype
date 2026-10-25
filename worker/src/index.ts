@@ -1,5 +1,6 @@
 import { authorized } from "./auth";
 import { LogHub } from "./loghub";
+import { describeJob, projectLog } from "./activity";
 import {
   all,
   one,
@@ -131,7 +132,13 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       400,
       "Worker ID required",
     );
-    await releaseDeadWorkers(env, data.workerId);
+    for (const lost of await releaseDeadWorkers(env, data.workerId))
+      await projectLog(
+        env,
+        lost.project_id,
+        `↻ ${describeJob(lost.type, JSON.parse(lost.payload_json))}: the previous Colab stopped during it; starting again on this one`,
+        lost.id,
+      );
     await expireLeases(env);
     await cleanupUploads(env);
     const job = await query(
@@ -143,6 +150,13 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       now() + 600000,
       now(),
     ).first();
+    if (job)
+      await projectLog(
+        env,
+        String(job.project_id),
+        `▶ ${describeJob(String(job.type), JSON.parse(String(job.payload_json)))} started on Colab${Number(job.attempt) > 1 ? ` (attempt ${job.attempt})` : ""}`,
+        String(job.id),
+      );
     return ok({
       job: job
         ? { ...job, payload: JSON.parse(String(job.payload_json)) }
@@ -282,7 +296,11 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       400,
       "Log lines required",
     );
-    await env.LOGHUB.getByName(job.project_id).append(jobId, data.lines);
+    const name = describeJob(job.type, JSON.parse(job.payload_json));
+    await env.LOGHUB.getByName(job.project_id).append(
+      jobId,
+      data.lines.map((line: string) => `${name} · ${line}`),
+    );
     return ok({ ok: true });
   }
   if (parts[2] === "fail") {
@@ -294,6 +312,12 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       jobId,
       token,
     ).run();
+    await projectLog(
+      env,
+      job.project_id,
+      `✗ ${describeJob(job.type, JSON.parse(job.payload_json))} failed${job.attempt < 3 ? `, retrying (attempt ${job.attempt} of 3)` : " 3 times; automatic rendering stopped"}: ${String(data.error || "GPU operation failed").slice(0, 300)}`,
+      jobId,
+    );
     await reconcileTerminalJobs(env);
     await cleanupUploads(env);
     if (job.attempt >= 3 && ["clip", "qa"].includes(job.type))
@@ -526,6 +550,22 @@ async function gpu(request: Request, env: Env, parts: string[]) {
     409,
     "Claim expired before completion",
   );
+  const name = describeJob(job.type, payload),
+    log = (line: string) => projectLog(env, job.project_id, line, jobId);
+  if (job.type === "fix_script") {
+    const left = validateScript(parseScript(result.script)).filter(
+      (i) => i.severity === "error",
+    ).length;
+    await log(
+      `✓ ${name} done · ${left ? `${left} error${left === 1 ? "" : "s"} left` : "no errors left"}${payload.remaining?.length ? ` · next: Episode ${payload.remaining[0]}` : ""}`,
+    );
+  } else if (job.type === "asset") {
+    const qa = result.qa;
+    await log(
+      `✓ ${name} ready${qa ? ` · QA ${qa.score}%${qa.score < qa.threshold ? ` (below ${qa.threshold}% after the retries; best image kept)` : ""}` : ""}`,
+    );
+  } else if (job.type === "clip") await log(`✓ ${name} done · QA next`);
+  else if (job.type === "assemble") await log(`✓ ${name} ready to watch in Final`);
   if (job.type === "fix_script" && payload.remaining?.length)
     await queueRepair(
       env,
@@ -536,7 +576,9 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       !!payload.autoApprove,
     );
   if (job.type === "fix_script" && !payload.remaining?.length && payload.autoApprove)
-    await autoApproveScript(env, job.project_id, `fixed:${jobId}`);
+    if (await autoApproveScript(env, job.project_id, `fixed:${jobId}`))
+      await log("✓ Script approved automatically; references are queued");
+    else await log("! Script still has errors; it waits for you in the Script tab");
   if (job.type === "asset" && payload.autoApprove) {
     try {
       await approveAssetVersion(
@@ -545,7 +587,9 @@ async function gpu(request: Request, env: Env, parts: string[]) {
         payload.assetId,
         payload.version,
       );
-      await resumeRendering(env, job.project_id);
+      await log(`✓ ${name} approved automatically`);
+      if (await resumeRendering(env, job.project_id))
+        await log("▶ All references for the next episode are approved; rendering starts");
     } catch (error) {
       if (!(error instanceof HttpError && error.status === 409)) throw error;
     }
@@ -556,9 +600,15 @@ async function gpu(request: Request, env: Env, parts: string[]) {
     // times; then the best-scoring take is selected and rendering moves on.
     const retake = payload.retake || 0;
     try {
-      if (result.pass)
+      const score =
+        typeof result.score === "number" ? `QA ${result.score}%` : "QA";
+      if (result.pass) {
         await approveClip(env, job.project_id, payload.clipId);
-      else if (retake < MAX_AUTO_RETAKES) {
+        await log(`✓ ${name.replace(/ QA$/, "")} · ${score} · selected`);
+      } else if (retake < MAX_AUTO_RETAKES) {
+        await log(
+          `↻ ${name.replace(/ QA$/, "")} · ${score}, below ${result.threshold ?? 75}% · retake ${retake + 1} of ${MAX_AUTO_RETAKES}${result.fix_hint ? ` with changes: ${String(result.fix_hint).slice(0, 240)}` : ""}`,
+        );
         await queueClip(
           env,
           job.project_id,
@@ -575,7 +625,17 @@ async function gpu(request: Request, env: Env, parts: string[]) {
           job.project_id,
           payload.sceneId,
         );
-        if (best) await approveClip(env, job.project_id, best.id);
+        if (best) {
+          await approveClip(env, job.project_id, best.id);
+          const chosen = await one(
+            env,
+            "SELECT take,json_extract(qa_json,'$.score') score FROM clips WHERE id=?",
+            best.id,
+          );
+          await log(
+            `! ${name.replace(/ · take \d+ QA$/, "")} · ${score} · after ${MAX_AUTO_RETAKES} retakes the best take ${chosen?.take} (${chosen?.score ?? "?"}%) is selected; worth a look`,
+          );
+        }
       }
     } catch (error) {
       if (!(error instanceof HttpError && error.status === 409)) throw error;
@@ -784,7 +844,7 @@ async function owner(request: Request, env: Env, parts: string[]) {
       ),
       jobs: await all(
         env,
-        "SELECT id,type,status,pct,stage,error,attempt,created_at FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 200",
+        "SELECT id,type,status,pct,stage,error,attempt,priority,created_at,json_extract(payload_json,'$.assetId') asset_id,json_extract(payload_json,'$.sceneId') scene_id FROM jobs WHERE project_id=? ORDER BY created_at DESC LIMIT 200",
         projectId,
       ),
       renders: await all(

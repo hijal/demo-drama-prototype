@@ -281,6 +281,7 @@ export async function queueClip(
     note,
     hint,
     retake,
+    take,
     context: previous?.status === "ready" ? previous : null,
   };
   // UNIQUE(scene_id,take) is the concurrency guard; no duplicate active take is silently accepted.

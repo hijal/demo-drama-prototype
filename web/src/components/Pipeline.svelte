@@ -38,6 +38,72 @@
     detail?.scenes?.filter((s: any) => s.episode_number === episode) || [],
   )
   const changes = $derived(diffLines(raw, draft))
+  // Colab works on one job at a time: show which asset/scene is running now and the queue order of the rest.
+  const activity = $derived.by(() => {
+    const map: Record<
+      string,
+      { running: boolean; pct: number; stage: string; position: number; type: string }
+    > = {}
+    if (!detail) return map
+    const open = detail.jobs.filter((j: any) =>
+      ['queued', 'claimed', 'running'].includes(j.status),
+    )
+    const queued = open
+      .filter((j: any) => j.status === 'queued')
+      .sort(
+        (a: any, b: any) =>
+          (b.priority ?? 0) - (a.priority ?? 0) || a.created_at - b.created_at,
+      )
+    for (const j of open) {
+      const key = j.asset_id || j.scene_id
+      if (!key || map[key]?.running) continue
+      const running = j.status !== 'queued'
+      map[key] = {
+        running,
+        pct: Math.round(j.pct || 0),
+        stage: j.stage || 'Starting',
+        position: running ? 0 : queued.indexOf(j) + 1,
+        type: j.type,
+      }
+    }
+    return map
+  })
+  // Live log: repeated progress lines collapse into one line with a count.
+  let logBox = $state<HTMLElement>()
+  let followLogs = true
+  const logLines = $derived.by(() => {
+    const out: { at: number; line: string; count: number; kind: string }[] = []
+    for (const entry of logs) {
+      const last = out[out.length - 1]
+      if (last && last.line === entry.line) {
+        last.count++
+        last.at = entry.at
+        continue
+      }
+      const mark = entry.line.trimStart()[0]
+      out.push({
+        at: entry.at,
+        line: entry.line,
+        count: 1,
+        kind:
+          mark === '✓'
+            ? 'ok'
+            : mark === '✗'
+              ? 'fail'
+              : mark === '↻' || mark === '!'
+                ? 'warn'
+                : mark === '▶'
+                  ? 'start'
+                  : 'info',
+      })
+    }
+    return out.slice(-300)
+  })
+  $effect(() => {
+    void logLines.length
+    if (followLogs && logBox)
+      queueMicrotask(() => logBox && (logBox.scrollTop = logBox.scrollHeight))
+  })
   // What is happening now, and the rare moment the owner must act. Everything else runs by itself.
   const guide = $derived.by(() => {
     if (!detail) return null
@@ -598,7 +664,7 @@
       <div class="section-head">
         <h2>Cast, props & locations</h2>
         <small
-          >Approve every required identity and voice before rendering.</small
+          >References are made, scored and approved automatically. Change any of them below.</small
         >
       </div>
       <div class="asset-grid">
@@ -611,13 +677,23 @@
           <article class="asset-card">
             <div class="section-head">
               <h3>{asset.name}</h3>
-              <span class="badge">{asset.status}</span>
+              <span
+                class="badge"
+                class:live={activity[asset.id]?.running}
+                >{activity[asset.id]
+                  ? activity[asset.id].running
+                    ? `generating · ${activity[asset.id].pct}%`
+                    : `queued #${activity[asset.id].position}`
+                  : asset.status}</span
+              >
             </div>
             <small
               >@{asset.ref} · {asset.kind}{asset.approved_version
                 ? ` · approved v${asset.approved_version}`
                 : ''}</small
-            >{#if files.qa}<div
+            >{#if activity[asset.id]?.running}<small class="stage"
+                >{activity[asset.id].stage}</small
+              >{/if}{#if files.qa}<div
                 class="qa-report"
                 class:below={files.qa.score < files.qa.threshold}
               >
@@ -745,8 +821,19 @@
           <article class="scene-card">
             <div class="section-head">
               <h3>Scene {scene.number} · {spec.title}</h3>
-              <span class="badge">{scene.duration}s requested</span>
+              <span
+                class="badge"
+                class:live={activity[scene.id]?.running}
+                >{activity[scene.id]
+                  ? activity[scene.id].running
+                    ? `${activity[scene.id].type === 'qa' ? 'QA checking' : 'rendering'} · ${activity[scene.id].pct}%`
+                    : `queued #${activity[scene.id].position}`
+                  : `${scene.duration}s`}</span
+              >
             </div>
+            {#if activity[scene.id]?.running}<small class="stage"
+                >{activity[scene.id].stage}</small
+              >{/if}
             <p>
               {spec.fields.VISUAL || spec.fields.KEYFRAME || spec.fields.AT}
             </p>
@@ -884,10 +971,34 @@
               >{/if}
           </article>{/each}
       </div>
-      <pre class="live-logs">{logs
-          .map((log) => `${new Date(log.at).toLocaleTimeString()} ${log.line}`)
-          .join('\n')}</pre>
     {/if}
+    <details class="log-dock" open>
+      <summary
+        >Live log{#if gpuOnline}<span class="live-dot" title="Colab online"
+          ></span>{/if}<small
+          >{logLines.length
+            ? `last update ${new Date(logLines[logLines.length - 1].at).toLocaleTimeString()}`
+            : 'waiting for activity'}</small
+        ></summary
+      >
+      <div
+        class="log-lines"
+        bind:this={logBox}
+        onscroll={() => {
+          if (logBox)
+            followLogs =
+              logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 24
+        }}
+      >
+        {#each logLines as entry}<div class="log-line {entry.kind}">
+            <time>{new Date(entry.at).toLocaleTimeString()}</time><span
+              >{entry.line}</span
+            >{#if entry.count > 1}<em>×{entry.count}</em>{/if}
+          </div>{:else}<p class="hint">
+            Nothing yet. Steps appear here as soon as Colab starts working.
+          </p>{/each}
+      </div>
+    </details>
   {:else}<div class="empty">
       <h2>Start with your script</h2>
       <p>

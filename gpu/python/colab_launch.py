@@ -138,7 +138,10 @@ try:
                     show_tail("ComfyUI", COMFY_LOG)
                     raise RuntimeError("Motion Context nodes failed to load; see the ComfyUI log above")
     say("●", f"GPU worker running. Open {studio_url} to work on your project. Compute units are being used.", "33")
-    worker = subprocess.Popen(["npm", "--workspace", "gpu", "start"], cwd=STUDIO_DIR, env=os.environ.copy())
+    # Colab only shows what Python prints, so relay the worker's log lines into the cell as they arrive.
+    worker = subprocess.Popen(["npm", "--silent", "--workspace", "gpu", "start"], cwd=STUDIO_DIR, env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in worker.stdout:
+        print(line, end="", flush=True)
     if worker.wait() != 0:
         raise RuntimeError("GPU worker stopped with an error; see the red lines above")
     say("■", "Worker finished. Deleting the runtime to stop compute-unit usage.", "33")

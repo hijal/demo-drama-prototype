@@ -1222,6 +1222,79 @@
       opacity: 0.45;
     }
   }
+  .badge.live {
+    border-color: #22d3ee80;
+    color: var(--accent);
+    animation: next-step-pulse 1.6s ease-in-out infinite;
+  }
+  .stage {
+    display: block;
+    color: var(--accent);
+    margin-top: 4px;
+  }
+  .log-dock {
+    position: sticky;
+    bottom: 0;
+    margin-top: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    z-index: 5;
+  }
+  .log-dock summary {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .log-dock summary small {
+    margin-left: auto;
+    font-weight: 400;
+    color: var(--muted);
+  }
+  .live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #34d399;
+    animation: next-step-pulse 1.6s ease-in-out infinite;
+  }
+  .log-lines {
+    max-height: 190px;
+    overflow: auto;
+    padding: 0 14px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+  }
+  .log-line {
+    display: flex;
+    gap: 10px;
+    padding: 2px 0;
+    color: var(--muted);
+  }
+  .log-line time {
+    flex-shrink: 0;
+    opacity: 0.7;
+  }
+  .log-line em {
+    font-style: normal;
+    opacity: 0.6;
+  }
+  .log-line.ok {
+    color: #34d399;
+  }
+  .log-line.fail {
+    color: var(--danger);
+  }
+  .log-line.warn {
+    color: #fbbf24;
+  }
+  .log-line.start {
+    color: var(--accent);
+  }
   .older-takes summary {
     cursor: pointer;
     color: var(--muted);

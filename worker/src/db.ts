@@ -75,14 +75,14 @@ export async function enqueue(
  */
 export async function releaseDeadWorkers(env: Env, workerId: string) {
   const time = now();
-  await query(
+  return all(
     env,
-    "UPDATE jobs SET status='queued',error='Colab stopped during this job; resumed on the next runtime',claim_token=NULL,claimed_by=NULL,lease_until=NULL,attempt=MAX(attempt-1,0),updated_at=? WHERE status IN ('claimed','running') AND claimed_by!=? AND claimed_at<? AND NOT EXISTS (SELECT 1 FROM gpu_workers w WHERE w.id=jobs.claimed_by AND w.last_seen>?)",
+    "UPDATE jobs SET status='queued',error='Colab stopped during this job; resumed on the next runtime',claim_token=NULL,claimed_by=NULL,lease_until=NULL,attempt=MAX(attempt-1,0),updated_at=? WHERE status IN ('claimed','running') AND claimed_by!=? AND claimed_at<? AND NOT EXISTS (SELECT 1 FROM gpu_workers w WHERE w.id=jobs.claimed_by AND w.last_seen>?) RETURNING id,project_id,type,payload_json",
     time,
     workerId,
     time - 60000,
     time - 60000,
-  ).run();
+  );
 }
 export async function expireLeases(env: Env) {
   const time = now();
