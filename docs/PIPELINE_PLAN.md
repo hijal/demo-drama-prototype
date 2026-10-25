@@ -461,13 +461,15 @@ If the next AI cannot read `~/Downloads`, ask the owner to attach the files.
 |---|---|---|---|
 | 0 Research & plan | DONE | 2026-10-25 | This document |
 | 1 Script format/parser/validator/fixer | IN PROGRESS | 2026-10-25 | Core code, docs/templates, private-input and mocked local-client tests implemented. Owner chose Colab-only; no paid provider calls. Local model serving, GPU evaluation and owner approval pending. Download token stays ignored. |
-| 2 Cloudflare backend + UI | IN PROGRESS | 2026-10-25 | Existing frontend converted to Svelte 5 + Vite; 10 browser tests cover core flows. Cloudflare backend/deployment and pipeline screens pending; needs owner wrangler login. |
-| 3 Colab GPU worker | NOT STARTED | | |
-| 4 Reference sheets | NOT STARTED | | |
-| 5 Prompts/QA/regenerate/voice/chaining | NOT STARTED | | |
-| 6 Assembly/music/subtitles/player | NOT STARTED | | |
+| 2 Cloudflare backend + UI | IN PROGRESS | 2026-10-25 | Svelte projects/review UI, D1/R2/DO backend and deployment implemented; local runtime/browser tests pass. Owner chose Dashboard Access setup; real login verification pending. |
+| 3 Colab GPU worker | IN PROGRESS | 2026-10-25 | Notebook, serial polling/leases/cancellation, local model server and model release implemented. Actual Colab execution pending. |
+| 4 Reference sheets | IN PROGRESS | 2026-10-25 | Klein views/variants/editing, H3 voice samples and version approval implemented; GPU quality verification pending. |
+| 5 Prompts/QA/regenerate/voice/chaining | IN PROGRESS | 2026-10-25 | Prompt, VLM/ASR/voice QA and retakes implemented. Voice calibration/lip sync need owner review; reference-video continuity implemented, latent Motion Context pending. |
+| 6 Assembly/music/subtitles/player | IN PROGRESS | 2026-10-25 | FFmpeg assembly, music ducking, ASR-timed SRT, preview/download implemented. Real codec/assembly verification in Colab pending. |
 
 ---
+
+Implementation, deployment and remaining acceptance checks: [PIPELINE_SETUP.md](PIPELINE_SETUP.md).
 
 ## Appendix A — Two complete prompts that produced good clips
 

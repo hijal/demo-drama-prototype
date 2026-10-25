@@ -63,3 +63,9 @@ next-env.d.ts
 /web/dist/
 /test-results/
 /playwright-report/
+
+# Cloudflare local state and runtime bundles
+.wrangler/
+.test-build/
+gpu/.runtime/
+.venv*/

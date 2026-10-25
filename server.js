@@ -97,6 +97,21 @@ async function start() {
   let vite
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname
+    const pipelineUrl = process.env.PIPELINE_URL || (dev ? 'http://127.0.0.1:8790' : '')
+    if (pipelineUrl && /^\/api\/(projects|status|media|gpu)(?:\/|$|\?)/.test(req.url)) {
+      if (!['GET', 'HEAD'].includes(req.method) && !req.url.startsWith('/api/gpu/') && req.headers.origin !== `http://${req.headers.host}`) {
+        res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({error:'Cross-origin write rejected'})); return
+      }
+      const target = new URL(req.url, pipelineUrl)
+      if (target.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(target.hostname)) {
+        res.writeHead(503); res.end('Local pipeline proxy requires a loopback HTTP endpoint'); return
+      }
+      const upstream = http.request(target, {method:req.method,headers:{...req.headers,host:target.host,origin:target.origin}}, response => {
+        res.writeHead(response.statusCode || 502, response.headers); response.pipe(res)
+      })
+      upstream.on('error', () => { if(!res.headersSent) res.writeHead(502,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Pipeline backend is unavailable. Start npm run dev:pipeline.'})) })
+      req.on('aborted', () => upstream.destroy()); req.pipe(upstream); return
+    }
     if (pathname === '/api' || pathname.startsWith('/api/')) {
       void handleApi(req, res)
       return

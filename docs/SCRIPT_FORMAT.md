@@ -134,7 +134,7 @@ npm --prefix worker run fix -- /path/to/script.txt --dry-run --out /private/tmp/
 
 Dry-run makes canonical text and a report **without calling any model server**. Exit code `0` means no validation errors, `2` means review/repair is still needed, and `1` means an execution/configuration failure. Output files are `<script>.fixed.txt` and `<script>.report.json`; existing files are protected unless `--overwrite` is supplied.
 
-Live repair runs **inside Colab** against an OpenAI-compatible model server on `http://127.0.0.1:8000/v1`. Model-server setup and a measured GPU evaluation are still pending; see [the Colab-only model decision](COLAB_LLM.md). There is no paid API fallback. HF_TOKEN, if present, is only for model downloads and is never forwarded by the inference client.
+Live repair runs **inside Colab** against an OpenAI-compatible model server on `http://127.0.0.1:8000/v1`. The notebook now provides the local model server; a measured GPU evaluation remains pending; see [the Colab-only model decision](COLAB_LLM.md). There is no paid API fallback. HF_TOKEN, if present, is only for model downloads and is never forwarded by the inference client.
 
 After the model is loaded locally, use Node 22.12+ (prefer Node 24):
 
@@ -145,7 +145,7 @@ npm --prefix worker run fix -- /path/to/script.txt --model Qwen/Qwen3.6-27B --ep
 
 `COLAB_LLM_MODEL` can supply the model ID instead of `--model`. An optional `COLAB_LLM_KEY` authenticates the local server; keep it in ignored configuration. The adapter refuses remote endpoints and HTTP redirects. Colab compute units are consumed while its GPU runtime is allocated, including during model download/loading and idle time.
 
-For comparison, run each model separately into different review folders, unloading the previous model before loading the next. Compare reports, diffs and timing before owner approval. `npm --prefix worker run compare -- ... --models model-a,model-b --episode 1 --out ...` only supports models **already available** from the local server; it does not load or switch GPU models. Do not load both merely to use this command.
+For comparison, run each model separately into different review folders, unloading the previous model before loading the next. Compare reports, diffs and timing before owner approval. `npm --prefix worker run compare -- ... --models model-a,model-b --episode 1 --out ...` requires candidates advertised by the local server. The bundled server loads each requested candidate on demand, releasing the previous model first. It never keeps both loaded.
 
 Live series repair requires an explicit episode to avoid truncation; it keeps the shared character definitions. Review and carry approved shared descriptions forward between episodes. The comparison does not select a winner or approve outputs automatically.
 

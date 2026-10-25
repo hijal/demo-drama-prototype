@@ -1,0 +1,97 @@
+import { test, expect } from '@playwright/test'
+import { film } from '../../worker/tests/fixtures'
+test('cloud studio exposes project/script approval flow without manual ComfyUI controls', async ({
+  page,
+}) => {
+  let created = false,
+    scripts: any[] = [],
+    approved = false
+  const project = {
+    id: 'p1',
+    title: 'Delivery project',
+    revision: 0,
+    approved_script_id: null,
+    auto_episode: null,
+  }
+  await page.route('**/api/**', async (route) => {
+    const req = route.request(),
+      path = new URL(req.url()).pathname,
+      body = req.method() === 'POST' ? req.postDataJSON() : null
+    let data: any = {}
+    if (path === '/api/capabilities') data = { manual: false, pipeline: true }
+    else if (path === '/api/status') data = { gpu: [] }
+    else if (path === '/api/projects' && body) {
+      created = true
+      data = { id: 'p1' }
+    } else if (path === '/api/projects')
+      data = { projects: created ? [project] : [] }
+    else if (path === '/api/projects/p1/scripts') {
+      scripts.unshift({
+        id: 's1',
+        kind: 'raw',
+        body: body.body,
+        report_json: '{"issues":[]}',
+        created_at: 1,
+      })
+      data = { versionId: 's1' }
+    } else if (path === '/api/projects/p1/approve-script') {
+      approved = true
+      project.revision++
+      data = { ok: true }
+    } else if (path === '/api/projects/p1/logs') data = []
+    else if (path === '/api/projects/p1')
+      data = {
+        project,
+        scripts,
+        assets: approved
+          ? [
+              {
+                id: 'ada',
+                ref: 'ada',
+                kind: 'character',
+                name: 'Ada',
+                status: 'draft',
+                spec_json: JSON.stringify({ fields: { FACE: 'round face' } }),
+              },
+            ]
+          : [],
+        assetVersions: [],
+        episodes: [],
+        scenes: [],
+        clips: [],
+        jobs: [],
+        renders: [],
+      }
+    else if (path.startsWith('/api/comfy/'))
+      throw new Error('Cloud studio must not call manual ComfyUI routes')
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/')
+  await expect(
+    page.getByRole('heading', { name: 'Drama pipeline' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Generate', exact: true }),
+  ).toHaveCount(0)
+  await page.getByLabel('New project title').fill('Delivery project')
+  await page.getByRole('button', { name: 'Create project' }).click()
+  await page
+    .getByLabel('Upload drama script')
+    .setInputFiles({
+      name: 'synthetic.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(film),
+    })
+  await page.getByRole('button', { name: 'Save version', exact: true }).click()
+  await expect.poll(() => scripts.length).toBe(1)
+  await page
+    .getByRole('button', { name: 'Approve script', exact: true })
+    .click()
+  await expect.poll(() => approved).toBe(true)
+  await expect(
+    page.getByRole('heading', { name: 'Cast, props & locations' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'Ada', exact: true }),
+  ).toBeVisible()
+})

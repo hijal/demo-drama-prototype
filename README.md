@@ -2,6 +2,10 @@
 
 A web UI for generating cinematic videos with sound using the **MiniMax H3** model on top of ComfyUI. Built to run on Google Colab (see [MiniMax_Studio_Colab.ipynb](MiniMax_Studio_Colab.ipynb)); all you need is an NVIDIA GPU.
 
+## Drama pipeline
+
+The Svelte project studio, Cloudflare backend and Colab-local GPU worker are available on `drama-pipeline`. Follow [pipeline setup](docs/PIPELINE_SETUP.md) for owner Access, Colab Secrets and the workflow. Actual GPU/model and final video acceptance checks remain pending; see the explicit verification gaps there.
+
 ## Features
 
 - **Video + audio generation** — two-pass (low-res → latent upscale → high-res)

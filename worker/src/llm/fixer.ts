@@ -19,7 +19,7 @@ export interface FixResult {
   proposals: Array<{ ref: string; fields: Record<string, string> }>
 }
 
-function faithfulness(original: Script, candidate: Script): Issue[] {
+export function faithfulness(original: Script, candidate: Script): Issue[] {
   const problems: Issue[] = []
   const fail = (line: number, text: string) => problems.push(issue('E12', 'error', line, text, 'মূল গল্পের dialogue, scene বা episode বদলেছে; আবার ঠিক করো।'))
   if (original.episodes.map(e => e.number).join(',') !== candidate.episodes.map(e => e.number).join(',')) fail(1, 'Do not add, remove or renumber episodes; a film must remain a film.')

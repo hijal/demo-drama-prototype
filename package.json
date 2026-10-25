@@ -13,7 +13,11 @@
     "typecheck:pipeline": "npm --prefix worker run typecheck",
     "dev:web": "npm --workspace web run dev",
     "build:web": "npm --workspace web run build",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "test:gpu": "npm --workspace gpu test",
+    "typecheck:gpu": "npm --workspace gpu run typecheck",
+    "test:backend": "npm --prefix worker run test:runtime",
+    "dev:pipeline": "npm --prefix worker run dev -- --port 8790"
   },
   "dependencies": {
     "next": "^16.1.1",
@@ -34,7 +38,8 @@
     "typescript": "^5"
   },
   "workspaces": [
-    "web"
+    "web",
+    "gpu"
   ],
   "engines": {
     "node": ">=22.12.0"

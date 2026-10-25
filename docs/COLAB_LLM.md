@@ -23,9 +23,9 @@ Sources checked on 2026-10-25:
 
 Use a separate Python environment for the LLM, preserving the working ComfyUI installation. First evaluate a standalone local model server before integrating it into the video notebook. Do not install a speculative inference stack into the working H3 environment.
 
-Expose OpenAI-compatible `/v1/models` and `/v1/chat/completions` on loopback port 8000. The current TypeScript client and CLI support text messages for script fixing. Frame/image requests, Python model serving, GPU lifecycle controls and the Cloudflare job protocol still need implementation. The CLI's model-list command lists loaded models, not the HF catalogue.
+Expose OpenAI-compatible `/v1/models` and `/v1/chat/completions` on loopback port 8000. The current TypeScript client and CLI support text messages for script fixing. Frame/image requests, the separate Python server, model release and the leased Cloudflare job protocol are now implemented; actual GPU execution remains unverified. The bundled server lists supported on-demand candidates and switches models serially; it does not query the HF catalogue.
 
-Use a single GPU job lock. Finish script/prompt tasks, unload the LLM, then load H3/Klein. For QA, release rendering models, load the VLM and process a batch of frames. On failure, clean up the failed model before switching. Do not assume simultaneous H3/Klein/LLM residency. The existing video notebook currently retains models in VRAM; explicit unload integration must be implemented and measured before these workflows share a runtime.
+Use a single GPU job lock. Finish script/prompt tasks, unload the LLM, then load H3/Klein. For QA, release rendering models, load the VLM and process a batch of frames. On failure, clean up the failed model before switching. Do not assume simultaneous H3/Klein/LLM residency. The existing video notebook currently retains models in VRAM; explicit unload integration is implemented but must be measured before these workflows share a runtime.
 
 Cloudflare stores and queues script/QA jobs; Colab executes them and returns results. Script repair waits while Colab is offline. Reviewing existing results does not need the GPU. Download credentials must not be forwarded as local inference credentials.
 
@@ -39,3 +39,5 @@ Cloudflare stores and queues script/QA jobs; Colab executes them and returns res
 6. Test switching between H3 and the LLM repeatedly. Include the loading/unloading overhead in per-episode time and compute-unit estimates. The previous assumption of zero GPU cost for QA no longer applies.
 
 Phase 1 remains in progress until actual model evaluation succeeds and the owner approves the repaired script. At the end of the GPU session, use **Disconnect and delete runtime** to stop compute-unit consumption.
+
+See [pipeline setup](PIPELINE_SETUP.md) and `Drama_Pipeline_Colab.ipynb` for the implemented launcher and acceptance gaps.
