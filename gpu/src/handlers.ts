@@ -219,7 +219,19 @@ async function asset(c: Context) {
     );
     files.sheet = await c.upload(sheet, "sheet.png");
   }
-  if (spec.kind === "character") {
+  // A look-only change keeps the approved voice so the character still sounds the same.
+  const keepVoice =
+    spec.kind === "character" &&
+    p.instruction &&
+    p.previous?.voice &&
+    !/voice|sound|accent|speak|speech|tone|gola|kontho|awaj/i.test(p.instruction);
+  if (keepVoice) {
+    await c.progress(75, "Keeping the previous voice sample");
+    files.voice = await c.upload(
+      await media(c, p.previous.voice, "voice.wav"),
+      "voice.wav",
+    );
+  } else if (spec.kind === "character") {
     await c.progress(75, "Creating voice sample");
     await local("/release", {}, c.signal);
     const refImages = front ? [await upload(front, c.signal)] : [];

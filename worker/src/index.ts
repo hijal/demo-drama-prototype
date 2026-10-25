@@ -18,11 +18,17 @@ import {
   invalidateRendersSQL,
   invalidateDependentClipsSQL,
 } from "./db";
-import { approveScript, queueClip, scheduleNext } from "./planning";
+import {
+  approveScript,
+  queueClip,
+  scheduleNext,
+  startWhenCastReady,
+} from "./planning";
 import { faithfulness } from "./llm/fixer";
 import { serializeScript } from "./script/serialize";
 import { parseScript } from "./script/parse";
 import { validateScript } from "./script/validate";
+import type { Issue, Script } from "./script/types";
 export { LogHub };
 const ok = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -510,6 +516,14 @@ async function gpu(request: Request, env: Env, parts: string[]) {
     409,
     "Claim expired before completion",
   );
+  if (job.type === "fix_script" && payload.remaining?.length)
+    await queueRepair(
+      env,
+      job.project_id,
+      result.script,
+      `fixed:${jobId}`,
+      payload.remaining,
+    );
   if (job.type === "qa") {
     if (result.pass && !result.needsOwnerReview) {
       try {
@@ -535,6 +549,84 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       ).run();
   }
   return ok({ ok: true });
+}
+async function queueAsset(
+  env: Env,
+  project: Record<string, any>,
+  asset: Record<string, any>,
+  instruction: string,
+) {
+  const projectId = project.id;
+  const active = await one(
+    env,
+    "SELECT id FROM jobs WHERE project_id=? AND type='asset' AND json_extract(payload_json,'$.assetId')=? AND status IN ('queued','claimed','running')",
+    projectId,
+    asset.id,
+  );
+  assert(!active, 409, "Asset generation already queued");
+  const version = (await one(
+    env,
+    "SELECT COALESCE(MAX(version),0)+1 next FROM asset_versions WHERE asset_id=?",
+    asset.id,
+  ))!.next;
+  // A change edits the approved image, or the newest one when nothing is approved yet.
+  const previous = instruction
+    ? await one(
+        env,
+        "SELECT files_json FROM asset_versions WHERE asset_id=? AND script_version_id=? ORDER BY version=? DESC,version DESC LIMIT 1",
+        asset.id,
+        project.approved_script_id,
+        asset.approved_version,
+      )
+    : null;
+  const jobId = await enqueue(env, projectId, "asset", {
+    assetId: asset.id,
+    spec: JSON.parse(asset.spec_json),
+    version,
+    instruction: instruction.slice(0, 2000),
+    previous: previous ? JSON.parse(previous.files_json) : null,
+    scriptVersion: project.approved_script_id,
+  });
+  await query(
+    env,
+    "UPDATE assets SET status='generating' WHERE id=?",
+    asset.id,
+  ).run();
+  return jobId;
+}
+async function queueRepair(
+  env: Env,
+  projectId: string,
+  body: string,
+  rawVersion: string,
+  episodes: Array<number | null>,
+) {
+  const [episode, ...remaining] = episodes;
+  let input = body;
+  if (episode !== null) {
+    const ast = parseScript(body);
+    input = serializeScript({
+      ...ast,
+      episodes: ast.episodes.filter((ep) => ep.number === episode),
+    });
+  }
+  return enqueue(env, projectId, "fix_script", {
+    body: input,
+    rawVersion,
+    episode,
+    remaining,
+  });
+}
+/** Episodes with an issue inside them; script-wide issues (cast, header) go with the first episode. */
+function episodesNeedingRepair(ast: Script, issues: Issue[]) {
+  const starts = ast.episodes.map((ep) => ep.line);
+  const needed = new Set<number>();
+  for (const issue of issues) {
+    let index = -1;
+    for (let i = 0; i < starts.length; i++) if (issue.line >= starts[i]) index = i;
+    needed.add(ast.episodes[Math.max(index, 0)].number);
+  }
+  return ast.episodes.map((ep) => ep.number).filter((n) => needed.has(n));
 }
 async function owner(request: Request, env: Env, parts: string[]) {
   const method = request.method,
@@ -652,35 +744,47 @@ async function owner(request: Request, env: Env, parts: string[]) {
     ).run();
     let jobId: string | undefined;
     if (data.fix) {
-      assert(
-        ast.episodes.length <= 1 || Number.isInteger(data.episode),
-        400,
-        "Choose one episode for LLM repair",
-      );
-      let input = data.body;
-      if (data.episode) {
-        const selected = ast.episodes.find((ep) => ep.number === data.episode);
-        assert(selected, 400, "Episode not found");
-        const { serializeScript } = await import("./script/serialize");
-        input = serializeScript({ ...ast, episodes: [selected] });
+      if (ast.episodes.length > 1 && data.episode !== undefined) {
+        assert(Number.isInteger(data.episode), 400, "Choose one episode for LLM repair");
+        assert(
+          ast.episodes.some((ep) => ep.number === data.episode),
+          400,
+          "Episode not found",
+        );
       }
-      jobId = await enqueue(env, projectId, "fix_script", {
-        body: input,
-        rawVersion: versionId,
-        episode: data.episode || null,
-      });
+      // A series is repaired one episode per job, chained in order, so the
+      // shared cast fixed in one episode carries into the next.
+      const episodes =
+        ast.episodes.length > 1
+          ? data.episode !== undefined
+            ? [data.episode as number]
+            : episodesNeedingRepair(ast, issues)
+          : [null];
+      if (episodes.length)
+        jobId = await queueRepair(env, projectId, data.body, versionId, episodes);
     }
     return ok({ versionId, jobId, issues }, 201);
   }
-  if (parts[2] === "approve-script")
-    return ok(
-      await approveScript(
-        env,
-        projectId,
-        String(data.versionId || ""),
-        Number(data.revision),
-      ),
+  if (parts[2] === "approve-script") {
+    const approved = await approveScript(
+      env,
+      projectId,
+      String(data.versionId || ""),
+      Number(data.revision),
     );
+    // The studio asks for every missing reference right away, so the owner only reviews.
+    if (data.generateAssets) {
+      const current = await getProject(env, projectId);
+      const missing = await all(
+        env,
+        "SELECT * FROM assets a WHERE project_id=? AND approved_version IS NULL AND status!='generating' AND NOT EXISTS (SELECT 1 FROM asset_versions v WHERE v.asset_id=a.id AND v.script_version_id=?) ORDER BY kind,name",
+        projectId,
+        current.approved_script_id,
+      );
+      for (const asset of missing) await queueAsset(env, current, asset, "");
+    }
+    return ok(approved);
+  }
   if (parts[2] === "assets") {
     const asset = await one(
       env,
@@ -717,47 +821,21 @@ async function owner(request: Request, env: Env, parts: string[]) {
         query(env, invalidateDependentClipsSQL),
         query(env, invalidateRendersSQL),
       ]);
-      return ok({ ok: true });
+      return ok({
+        ok: true,
+        renderStarted: data.autoRender
+          ? await startWhenCastReady(env, projectId)
+          : false,
+      });
     }
     assert(
       parts[4] === "generate" && project.approved_script_id,
       409,
       "Approve the script first",
     );
-    const active = await one(
-      env,
-      "SELECT id FROM jobs WHERE project_id=? AND type='asset' AND json_extract(payload_json,'$.assetId')=? AND status IN ('queued','claimed','running')",
-      projectId,
-      asset.id,
-    );
-    assert(!active, 409, "Asset generation already queued");
-    const version = (await one(
-      env,
-      "SELECT COALESCE(MAX(version),0)+1 next FROM asset_versions WHERE asset_id=?",
-      asset.id,
-    ))!.next;
-    let previous = null;
-    if (asset.approved_version)
-      previous = await one(
-        env,
-        "SELECT files_json FROM asset_versions WHERE asset_id=? AND version=?",
-        asset.id,
-        asset.approved_version,
-      );
-    const jobId = await enqueue(env, projectId, "asset", {
-      assetId: asset.id,
-      spec: JSON.parse(asset.spec_json),
-      version,
-      instruction: String(data.instruction || "").slice(0, 2000),
-      previous: previous ? JSON.parse(previous.files_json) : null,
-      scriptVersion: project.approved_script_id,
+    return ok({
+      jobId: await queueAsset(env, project, asset, String(data.instruction || "")),
     });
-    await query(
-      env,
-      "UPDATE assets SET status='generating' WHERE id=?",
-      asset.id,
-    ).run();
-    return ok({ jobId });
   }
   if (parts[2] === "scenes") {
     if (parts[4] === "render")

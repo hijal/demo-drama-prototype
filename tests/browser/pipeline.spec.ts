@@ -5,6 +5,8 @@ test("cloud studio preserves the original shell and project approval without cal
 }) => {
   let created = false,
     scripts: any[] = [],
+    uploads: any[] = [],
+    approval: any = null,
     approved = false;
   const project = {
     id: "p1",
@@ -26,6 +28,7 @@ test("cloud studio preserves the original shell and project approval without cal
     } else if (path === "/api/projects")
       data = { projects: created ? [project] : [] };
     else if (path === "/api/projects/p1/scripts") {
+      uploads.push(body);
       scripts.unshift({
         id: "s1",
         kind: "raw",
@@ -36,6 +39,7 @@ test("cloud studio preserves the original shell and project approval without cal
       data = { versionId: "s1" };
     } else if (path === "/api/projects/p1/approve-script") {
       approved = true;
+      approval = body;
       project.revision++;
       data = { ok: true };
     } else if (path === "/api/projects/p1/logs") data = [];
@@ -84,12 +88,15 @@ test("cloud studio preserves the original shell and project approval without cal
     mimeType: "text/plain",
     buffer: Buffer.from(film),
   });
-  await page.getByRole("button", { name: "Save version", exact: true }).click();
+  // Upload saves at once and asks for repair, since the fixture has a W01 warning.
   await expect.poll(() => scripts.length).toBe(1);
+  expect(uploads[0].fix).toBe(true);
+  await expect(page.getByText("If it looks right, press Approve script.")).toBeVisible();
   await page
     .getByRole("button", { name: "Approve script", exact: true })
     .click();
   await expect.poll(() => approved).toBe(true);
+  expect(approval.generateAssets).toBe(true);
   await expect(
     page.getByRole("heading", { name: "Cast, props & locations" }),
   ).toBeVisible();

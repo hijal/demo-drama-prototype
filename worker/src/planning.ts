@@ -334,3 +334,48 @@ export async function scheduleNext(env: Env, projectId: string) {
       projectId,
     ).run();
 }
+/**
+ * Start rendering the first episode once every reference its scenes need is
+ * approved, so the owner does not have to press Render. Only the first time:
+ * nothing happens when takes already exist for the approved script.
+ */
+export async function startWhenCastReady(env: Env, projectId: string) {
+  const p = await getProject(env, projectId);
+  if (!p.approved_script_id || p.auto_episode !== null) return false;
+  const started = await one(
+    env,
+    "SELECT c.id FROM clips c JOIN scenes s ON s.id=c.scene_id JOIN episodes e ON e.id=s.episode_id WHERE e.project_id=? AND c.script_version_id=? LIMIT 1",
+    projectId,
+    p.approved_script_id,
+  );
+  if (started) return false;
+  const scenes = await all(
+    env,
+    "SELECT s.spec_json,e.number episode FROM scenes s JOIN episodes e ON e.id=s.episode_id WHERE e.project_id=? AND s.script_version_id=? AND e.number=(SELECT MIN(e2.number) FROM episodes e2 JOIN scenes s2 ON s2.episode_id=e2.id WHERE e2.project_id=? AND s2.script_version_id=?)",
+    projectId,
+    p.approved_script_id,
+    projectId,
+    p.approved_script_id,
+  );
+  if (!scenes.length) return false;
+  const needed = new Set(
+    scenes.flatMap((s) => references(JSON.parse(s.spec_json) as Scene)),
+  );
+  const assets = await all(
+    env,
+    "SELECT ref,approved_version FROM assets WHERE project_id=?",
+    projectId,
+  );
+  const ready = assets
+    .filter((a) => needed.has(a.ref) || needed.has(a.ref + "s"))
+    .every((a) => a.approved_version !== null);
+  if (!ready) return false;
+  await query(
+    env,
+    "UPDATE projects SET auto_episode=? WHERE id=?",
+    scenes[0].episode,
+    projectId,
+  ).run();
+  await scheduleNext(env, projectId);
+  return true;
+}

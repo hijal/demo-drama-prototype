@@ -35,7 +35,15 @@ Qwen3.6-27B and Qwen3.5-9B are candidates, not measured winners. The local serve
 
 ## Workflow
 
-Create a project → upload script → repair one episode if necessary → inspect original, draft, diff and errors → approve script → generate and approve each required reference/voice version → render individual scenes or queue an episode → inspect QA and approve takes → upload optional music → assemble episode or series → preview/download MP4 and SRT.
+Create a project → upload script. The owner only approves; the studio starts each next step itself:
+
+1. **Upload** saves the script and, when it has problems, queues the Colab LLM repair. A series is repaired one episode per job, in order; each job starts from the previous episode's fixed version, so the shared cast carries forward. Episodes without issues are skipped. One episode can still be repaired alone.
+2. **Approve script** (the studio sends `generateAssets`) queues a reference for every character, prop and location that has none for this script.
+3. **Approve a reference** (the studio sends `autoRender`). When the last reference used by the first episode is approved and no takes exist yet, rendering of that episode starts. **Apply change** edits the current image, or the newest one if none is approved, and keeps the previous voice unless the instruction mentions voice/accent/speech; **Recreate fully** makes a new version from the description.
+4. Takes are QA-checked; passing takes are approved automatically and the next scene starts. The scene board shows the approved (or newest) take, with older takes collapsed.
+5. Regenerate any scene with a note, upload optional music, then **Make final video** (episode or series) → preview/download MP4 and SRT.
+
+A "next step" bar at the top of each project tells the owner what to do now or what Colab is working on. Further episodes of a series are started with **Render episode automatically**, so compute units are spent one episode at a time.
 
 Formatting-only edits preserve valid approvals. Changed content/reference versions invalidate dependent takes and exports. Replacing an approved take also invalidates downstream context-dependent takes. Large video/latent artifacts upload in 16 MiB parts; small files retain direct PUT. Multipart completion is idempotent and cancelled/expired attempts are aborted by cancellation handling, claim cleanup and the five-minute cron. Active jobs use ten-minute leases with heartbeat renewal, attempt-specific uploads and claim tokens. Only a known claim's token-bearing progress heartbeat extends its lease; an idle worker cannot keep a lost claim alive. Transient claim failures retry with bounded request timeouts until the idle cutoff; cancellation invalidates the token. Failed jobs retry up to three attempts. Visual/dialogue QA can request up to two retakes; uncalibrated voice or lip-sync checks pause for owner review.
 
