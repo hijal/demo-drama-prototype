@@ -102,6 +102,14 @@ function lines(scene: Scene): Line[] {
   }
   return result;
 }
+/** Output size; RENDER_SHORT_SIDE=720 gives quick test renders (default 1080p). */
+function renderSize(aspect: string) {
+  const short = Number(process.env.RENDER_SHORT_SIDE) === 720 ? 720 : 1080,
+    long = (short * 16) / 9;
+  return aspect === "9:16"
+    ? { width: short, height: long }
+    : { width: long, height: short };
+}
 async function imageFile(
   c: Context,
   prompt: string,
@@ -359,10 +367,7 @@ async function clip(c: Context) {
     aspectRatio: p.aspect,
     duration: scene.duration,
     seed: Math.floor(Math.random() * 2147483647),
-    targetDimensions:
-      p.aspect === "9:16"
-        ? { width: 1080, height: 1920 }
-        : { width: 1920, height: 1080 },
+    targetDimensions: renderSize(p.aspect),
     lowResMP: 0.2,
     firstSamplerSteps: 4,
     sigmaVariant: "3step",
@@ -579,8 +584,7 @@ export async function assemble(c: Context) {
       source = await media(c, item.key, `source-${i}.mp4`),
       info = await probe(source, c.signal),
       path = join(c.folder, `normalized-${i}.mp4`),
-      width = p.aspect === "9:16" ? 1080 : 1920,
-      height = p.aspect === "9:16" ? 1920 : 1080;
+      { width, height } = renderSize(p.aspect);
     await command(
       "ffmpeg",
       [
