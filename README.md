@@ -28,9 +28,8 @@ Step 7 deletes the runtime automatically after `IDLE_MINUTES` without a generati
 
 ```
 ├── MiniMax_Studio_Colab.ipynb   ← Colab launcher (ComfyUI + Web UI + tunnel)
-├── web/                         ← Svelte 5 + Vite frontend
-├── server.js                    ← Svelte static/dev server + ComfyUI API
-├── next.config.ts
+├── web/                         ← Svelte 5 + SvelteKit frontend
+├── server.js                    ← SvelteKit Node server launcher
 ├── .env                         ← COMFY_URL / COMFY_ROOT
 ├── config/
 │   ├── config.ini               ← app settings (VRAM, diffusion model, sound)
@@ -41,7 +40,7 @@ Step 7 deletes the runtime automatically after `IDLE_MINUTES` without a generati
 │   └── Minimax_Studio_Workflow.json  ← workflow for plain ComfyUI
 ├── scripts/
 │   └── build.mjs                ← production build with an 8 GB Node heap
-└── src/                         ← API routes and framework-independent ComfyUI logic
+└── src/                         ← framework-independent ComfyUI logic and shared stores
 ```
 
 ## Settings
@@ -75,7 +74,7 @@ Expected files (in `ComfyUI/models/`), downloaded by notebook Step 6:
 ```
 Browser
   │
-  ├─ Svelte 5 + Vite frontend (web/)
+  ├─ Svelte 5 + SvelteKit frontend (web/)
   │
   ├─ /api/comfy/*  ── proxy ──►  ComfyUI (:8188)
   │                                └─ Workflow: MiniMax H3 Ref2VA, two-pass latent upscaler
@@ -111,8 +110,8 @@ Browser
 
 ```bash
 npm ci               # root + Svelte workspace dependencies (Node 22.12+, prefer 24)
-npm run dev          # Svelte HMR + existing API on :3000
-npm run build        # Svelte frontend + existing API production build
+npm run dev          # SvelteKit HMR + local API on :3000
+npm run build        # SvelteKit Node server + Cloudflare static UI
 npm start            # production server (:3000)
 npm run typecheck    # API/shared TypeScript + Svelte diagnostics
 npm test             # resolution metadata and repeat-generation regression tests
@@ -123,19 +122,33 @@ npm run typecheck:pipeline
 
 The Web UI expects ComfyUI at `COMFY_URL` (default `http://127.0.0.1:8188`) and its folder at `COMFY_ROOT`.
 
-The entire frontend now lives in `web/` and uses Svelte 5 + Vite: Generate,
-Gallery, Settings, prompt editor/history, reference uploads, previews and queue.
-Shared form, queue and history stores keep their existing localStorage keys.
-`server.js` serves Svelte on port 3000 and forwards `/api/*` to the existing
-Next.js route handlers. Next.js and its React peer dependencies remain for the
-API runtime; the browser UI does not use React, Radix, Next themes or Sonner.
+The frontend and local API now use **Svelte 5 + SvelteKit 3**. The studio
+keeps its existing browser UI, queue/history localStorage keys and ComfyUI workflows.
+`web/src/routes/api/**/+server.ts` contains all 30 local API route files; there is
+no Next.js or React runtime. `src/lib/` remains shared with the GPU worker.
 
-The new script-to-video pipeline is being built separately in `worker/`. See
-[the script format and local CLI instructions](docs/SCRIPT_FORMAT.md),
-[the Colab-only model decision](docs/COLAB_LLM.md) and
-[the phase status/handoff](docs/PIPELINE_PLAN.md). Install its development tools
-with `npm --prefix worker ci` (Node 22.12+, Node 24 recommended).
+- `npm run dev`: SvelteKit development server on port 3000.
+- `npm run build`: Node server in `web/build/` and Cloudflare static UI in `web/dist/`.
+- `npm start`: production SvelteKit Node server via the small `server.js` launcher.
+- `npm run build:web`: static UI only, served by the existing Cloudflare Worker.
 
-Browser tests mock the ComfyUI API and do not run GPU jobs. An actual Colab
-render after migration still needs GPU verification. The notebook now installs
-Node 24 and checks both the API build and `web/dist/index.html` before startup.
+The Node launcher reads the root `.env` and supports `COMFY_URL`, `COMFY_ROOT`,
+`PORT` and `BIND_HOST`. `STUDIO_ROOT` keeps configuration, staged uploads and model
+paths anchored to the repository. Large model uploads stream to disk; the Node
+server has no fixed request body size limit. Set `BODY_SIZE_LIMIT` to override.
+Behind the Colab tunnel, forwarded protocol and Host determine the request origin;
+the launcher supplies HTTP for direct local connections.
+
+The studio is intentionally browser-rendered (`ssr = false`) because its persisted
+queue, uploads, audio and GPU polling live in the browser. SvelteKit owns routing,
+builds and local endpoints. Cloudflare continues to own pipeline auth, D1, R2,
+Durable Object logs and GPU job APIs; Node-only filesystem endpoints are excluded
+from the static deployment. `PIPELINE_URL` enables the loopback-only local proxy.
+
+The script-to-video pipeline lives in `worker/`. See
+[script format](docs/SCRIPT_FORMAT.md), [Colab models](docs/COLAB_LLM.md) and
+[pipeline setup and acceptance gaps](docs/PIPELINE_SETUP.md).
+
+Browser tests mock ComfyUI and do not run GPU jobs. An actual Colab render still
+needs GPU verification. The notebooks check `web/build/index.js` and the cloud
+UI output before startup.

@@ -26,7 +26,7 @@ export interface LoraEntry {
 export const TURBO_LORA_NAME = 'minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors'
 
 function lorasFile(): string {
-  return path.join(process.cwd(), 'data', 'loras.json')
+  return path.join((process.env.STUDIO_ROOT || process.cwd()), 'data', 'loras.json')
 }
 
 export function loadLoras(): LoraEntry[] {

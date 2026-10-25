@@ -1,10 +1,21 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"], "strict": true, "skipLibCheck": true,
-    "allowJs": true, "checkJs": false, "isolatedModules": true,
-    "esModuleInterop": true, "resolveJsonModule": true, "verbatimModuleSyntax": true,
-    "paths": { "@/*": ["../src/*"] }, "types": ["svelte", "vite/client"]
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "checkJs": false,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "types": ["svelte", "vite/client", "$app/types"],
+    "paths": {
+      "@/*": ["../src/*"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+  "extends": "$app/tsconfig"
 }

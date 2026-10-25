@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync } from 'fs'
 import { join, resolve } from 'path'
 
-const CONFIG_PATH = join(process.cwd(), 'config', 'config.ini')
+const CONFIG_PATH = join((process.env.STUDIO_ROOT || process.cwd()), 'config', 'config.ini')
 
 export interface AppConfig {
   reserveGb: number
@@ -77,7 +77,7 @@ export function getAppConfig(): AppConfig {
   const rawRoot =
     (ini['comfy.comfy_dir'] ?? '').trim() ||
     (process.env.COMFY_ROOT || '').trim() ||
-    join(process.cwd(), 'ComfyUI-Easy-Install')
+    join((process.env.STUDIO_ROOT || process.cwd()), 'ComfyUI-Easy-Install')
   const comfyRoot = resolve(rawRoot)
 
   const config: AppConfig = {

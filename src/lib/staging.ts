@@ -10,7 +10,7 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 
-const STAGE_DIR = path.resolve(process.env.LOCAL_INPUT_DIR || './.local-input')
+const STAGE_DIR = path.resolve(process.env.LOCAL_INPUT_DIR || path.join(process.env.STUDIO_ROOT || process.cwd(), '.local-input'))
 
 /** Characters that are unsafe in a filename on any of our target platforms. */
 const UNSAFE_CHARS = /[<>:"/\\|?*\x00-\x1f]/g

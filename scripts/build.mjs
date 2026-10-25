@@ -1,23 +1,20 @@
-#!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
-const env = {
-  ...process.env,
-  NEXT_TELEMETRY_DISABLED: '1',
-  NODE_OPTIONS:
-    `${process.env.NODE_OPTIONS || ''} --max-old-space-size=${Number(process.env.NEXT_BUILD_HEAP_MB) || 8192}`.trim(),
-}
-for (const args of [
-  ['--workspace', 'web', 'run', 'build'],
-  ['exec', '--', 'next', 'build', '--webpack'],
-]) {
-  const result = spawnSync('npm', args, {
-    env,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  })
-  if (result.error) {
-    console.error(result.error.message)
-    process.exit(1)
-  }
-  if (result.status !== 0) process.exit(result.status ?? 1)
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const web = fileURLToPath(new URL("../web", import.meta.url));
+const root = fileURLToPath(new URL("..", import.meta.url));
+const targets = process.argv.includes("--cloud")
+  ? ["cloud"]
+  : process.argv.includes("--node")
+    ? ["node"]
+    : ["node", "cloud"];
+for (const target of targets) {
+  const result = spawnSync("npm", ["exec", "--", "vite", "build"], {
+    cwd: web,
+    env: { ...process.env, BUILD_TARGET: target, STUDIO_ROOT: root },
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
 }

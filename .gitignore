@@ -69,3 +69,7 @@ next-env.d.ts
 .test-build/
 gpu/.runtime/
 .venv*/
+
+# SvelteKit generated files
+/web/.svelte-kit/
+/web/build/

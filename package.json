@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "node server.js --dev",
+    "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "build:default": "npm run build",
     "start": "node server.js",
@@ -12,7 +12,7 @@
     "test:pipeline": "npm --prefix worker test",
     "typecheck:pipeline": "npm --prefix worker run typecheck",
     "dev:web": "npm --workspace web run dev",
-    "build:web": "npm --workspace web run build",
+    "build:web": "npm --workspace web run build:cloud",
     "test:ui": "playwright test",
     "test:gpu": "npm --workspace gpu test",
     "typecheck:gpu": "npm --workspace gpu run typecheck",
@@ -21,9 +21,6 @@
     "test:assembly": "npm --workspace gpu run test:assembly"
   },
   "dependencies": {
-    "next": "^16.1.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "sharp": "^0.34.3",
     "ws": "^8.21.0",
     "zustand": "^5.0.6"
@@ -31,8 +28,6 @@
   "devDependencies": {
     "@playwright/test": "^1.64.1",
     "@types/node": "^24",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
     "prettier": "^3.9.10",
     "prettier-plugin-svelte": "^4.1.1",

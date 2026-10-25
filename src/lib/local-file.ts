@@ -8,7 +8,6 @@
  */
 import { createReadStream, promises as fs } from 'fs'
 import { Readable } from 'node:stream'
-import type { NextRequest } from 'next/server'
 import { safeOutputPath } from './thumb'
 
 const MIME: Record<string, string> = {
@@ -77,7 +76,7 @@ function pipeNodeStream(source: Readable): { stream: ReadableStream<Uint8Array>;
  * staged reference file) instead of resolving inside the output dir.
  */
 export async function serveLocalFile(
-  req: NextRequest,
+  req: Request,
   filename: string,
   sourceOverride?: string | null,
 ): Promise<Response | null> {

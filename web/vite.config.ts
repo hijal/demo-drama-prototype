@@ -1,9 +1,25 @@
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
-import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { sveltekit } from "@sveltejs/kit/vite";
+import node from "@sveltejs/adapter-node";
+import staticAdapter from "@sveltejs/adapter-static";
 import { fileURLToPath } from "node:url";
 export default defineConfig({
-  plugins: [tailwindcss(), svelte()],
+  root: fileURLToPath(new URL(".", import.meta.url)),
+  plugins: [
+    tailwindcss(),
+    sveltekit({
+      adapter:
+        process.env.BUILD_TARGET === "cloud"
+          ? staticAdapter({
+              pages: "dist",
+              assets: "dist",
+              fallback: "index.html",
+              strict: false,
+            })
+          : node({ out: "build" }),
+    }),
+  ],
   resolve: {
     alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   },
@@ -22,7 +38,5 @@ export default defineConfig({
         "**/*.report.json",
       ],
     },
-    proxy: { "/api": "http://127.0.0.1:3000" },
   },
-  build: { outDir: "dist", emptyOutDir: true },
 });

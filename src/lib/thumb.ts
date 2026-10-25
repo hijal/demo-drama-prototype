@@ -51,7 +51,7 @@ let ffmpegBin: string | null = null
  */
 function runtimeFfmpeg(): string {
   for (const d of [
-    path.join(process.cwd(), 'runtime', 'ffmpeg'),
+    path.join((process.env.STUDIO_ROOT || process.cwd()), 'runtime', 'ffmpeg'),
     path.join(getAppConfig().comfyRoot, '..', 'runtime', 'ffmpeg'),
   ]) {
     const bin = path.join(d, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')

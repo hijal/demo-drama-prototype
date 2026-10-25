@@ -100,3 +100,12 @@ Local verification on 2026-10-25: 71 tests passed (11 FLF regressions, 33 script
 The optional node pack is fetched separately from [H3 Motion Context revision 518c083](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context/tree/518c083d11d80fa5920222ad89889924ee4401c9) (GPL-3.0). Upstream code is not copied into this repository. The graph builder is covered by tests for both sampling passes, preservation of image/voice references, AV trimming, cycle-free links, first-clip behavior and frame limits. These graph checks do not establish perceptual continuity quality.
 
 Latest local verification: 88 tests (11 FLF, 33 script/client, 14 GPU helper, 5 Python safety, 11 workerd, 11 browser, 3 real FFmpeg integration), plus root/Worker/GPU typechecks. The earlier 71-test result above records the initial deployment. Access placeholders and GPU quality acceptance remain pending.
+
+## SvelteKit migration
+
+The studio now builds with Svelte 5 and SvelteKit 3. `npm run build` produces
+`web/build` for local/Colab Node serving and `web/dist` for the existing Worker
+assets binding. `npm run build:web` produces only the Cloudflare static UI.
+The pipeline Worker API, D1/R2 schema and GPU protocol are unchanged. Local
+ComfyUI endpoints have moved to `web/src/routes/api/**/+server.ts`.
+Next.js and React are no longer runtime or build dependencies.
