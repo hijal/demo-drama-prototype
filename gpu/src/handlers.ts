@@ -149,7 +149,15 @@ async function asset(c: Context) {
       await c.progress(15 + views.length * 8, `Creating ${view} reference`);
       const path = await imageFile(
         c,
-        `Show the exact same ${spec.name} and preserve its identity, colors, materials and outfit. ${description}. ${view === "face" ? "Close-up detail view." : `${view} view.`} No labels or text.`,
+        `Show the exact same ${spec.name} and preserve its identity, colors, materials and outfit. ${description}. ${
+          view === "face"
+            ? spec.kind === "character"
+              ? "Head-and-shoulders close-up portrait; the face fills most of the frame."
+              : "Close-up detail view."
+            : spec.kind === "character"
+              ? `Full body seen from the ${view === "back" ? "back" : `${view} side, in profile`}; arms relaxed.`
+              : `${view} view.`
+        } One single photo of one subject, not a collage. No labels or text.`,
         `${view}.png`,
         await inlineImage(front),
       );
