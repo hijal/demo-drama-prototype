@@ -29,7 +29,7 @@ Open [Drama Pipeline notebook](https://colab.research.google.com/github/hijal/de
 - `GPU_KEY`: the value in local ignored `worker/.dev.vars`. Do not paste it into chat, notebook cells or git.
 - `HF_TOKEN`: your existing download token, with permission for the chosen gated weights. This is for downloading models only.
 
-Run all with an appropriate GPU. The first six setup steps retain the H3 install; the last launches ComfyUI, a separate Python model environment, and the serial TypeScript worker. Models load on demand and are released between tasks. The runtime consumes Colab compute units while allocated, including loading and idle time. An idle timeout deletes the runtime; also use **Runtime → Disconnect and delete runtime** when finished.
+Run all with an appropriate GPU. The notebook checks the GPU key/bypass through `/api/gpu/health` before installing the second model environment. The first six setup steps retain the H3 install; the last launches ComfyUI, a separate Python model environment, and the serial TypeScript worker. Models load on demand and are released between tasks. Pipeline ComfyUI input/output uses separate local `/content/drama-comfy-*` folders instead of slow Drive media paths. After ComfyUI becomes idle, only the completed attempt's output folder and its uploaded inputs are removed; approved artifacts/latents remain in private R2. The runtime consumes Colab compute units while allocated, including loading and idle time. An idle timeout deletes the runtime; also use **Runtime → Disconnect and delete runtime** when finished.
 
 Qwen3.6-27B and Qwen3.5-9B are candidates, not measured winners. The local server switches between candidates on demand, one model at a time. `npm --prefix worker run compare -- /content/private-script.txt --models Qwen/Qwen3.6-27B,Qwen/Qwen3.5-9B --episode 1 --out /content/private-review` runs the same episode sequentially. Keep private results outside the checkout. Actual quality, memory, latency and owner approval remain required.
 
@@ -37,7 +37,7 @@ Qwen3.6-27B and Qwen3.5-9B are candidates, not measured winners. The local serve
 
 Create a project → upload script → repair one episode if necessary → inspect original, draft, diff and errors → approve script → generate and approve each required reference/voice version → render individual scenes or queue an episode → inspect QA and approve takes → upload optional music → assemble episode or series → preview/download MP4 and SRT.
 
-Formatting-only edits preserve valid approvals. Changed content/reference versions invalidate dependent takes and exports. Replacing an approved take also invalidates downstream context-dependent takes. Active jobs use ten-minute leases with heartbeat renewal, attempt-specific uploads and claim tokens; cancellation invalidates the token. Failed jobs retry up to three attempts. Visual/dialogue QA can request up to two retakes; uncalibrated voice or lip-sync checks pause for owner review.
+Formatting-only edits preserve valid approvals. Changed content/reference versions invalidate dependent takes and exports. Replacing an approved take also invalidates downstream context-dependent takes. Large video/latent artifacts upload in 16 MiB parts; small files retain direct PUT. Multipart completion is idempotent and cancelled/expired attempts are aborted by cancellation handling, claim cleanup and the five-minute cron. Active jobs use ten-minute leases with heartbeat renewal, attempt-specific uploads and claim tokens. Only a known claim's token-bearing progress heartbeat extends its lease; an idle worker cannot keep a lost claim alive. Transient claim failures retry with bounded request timeouts until the idle cutoff; cancellation invalidates the token. Failed jobs retry up to three attempts. Visual/dialogue QA can request up to two retakes; uncalibrated voice or lip-sync checks pause for owner review.
 
 ## Local development
 
@@ -56,6 +56,8 @@ The local API proxy targets loopback port 8790 and rewrites only validated same-
 npm test
 npm run test:pipeline
 npm run test:gpu
+# Requires ffmpeg and ffprobe on PATH (provided by the Colab install):
+npm run test:assembly
 python3 -m unittest discover -s gpu/tests -p 'test_*.py'
 npm run typecheck
 npm run typecheck:pipeline
@@ -84,10 +86,17 @@ npx wrangler deploy --secrets-file .dev.vars
 - Execute real local model text/image requests, compare both fixer candidates on Jungle Episode 01 and approve the repair.
 - Verify Klein identity sheets/variants and H3 voice/render output, repeated GPU model switches, memory use and dependency compatibility on the actual Colab runtime.
 - Calibrate `VOICE_MIN_SIMILARITY` using approved good/bad samples. Empty threshold requests owner review. Lip sync currently requires owner review; it is not automatically measured.
-- Current continuity uses approved predecessor video/audio as H3 references, bounded to four scenes. **Latent Motion Context/Director integration from the original plan is not implemented.** Compare continuity before adopting or claiming seamless chaining.
-- Run real FFmpeg cut/fade, music ducking, subtitle and final MP4 checks in Colab. FFmpeg/ffprobe were unavailable in the local workspace; subtitle arithmetic has unit tests, but a synthetic storage test does not validate an actual assembled video.
+- Compare the available `reference-video` and `latent` continuity strategies in Colab, using the last-cell `CONTINUITY_STRATEGY` selector. Latent mode installs pinned Motion Context, saves low/high AV latents independently, pins both sampling passes, shifts dialogue past the 22-frame head and trims picture/audio together. Chains remain bounded to four scenes. Long scenes that cannot fit the head within 719 frames, and older takes without latent pairs, use reference-video continuity. No GPU quality winner is selected; Director comparison remains pending.
+- Play the actual rendered episode/series on Colab and the owner's Mac. CPU integration tests now produce and decode real 1080p H.264 yuv420p/AAC stereo 48 kHz MP4s, including cut, fade into a shorter clip, mono music ducking and burned subtitles. Tested with temporary macOS arm64 FFmpeg 4.4 / ffprobe 5.0.1 tools; actual H3 source clips and the Colab codecs still need acceptance testing.
 - Test owner and non-owner Access logins after Dashboard configuration. Until then the private API stays locked.
 
 These are acceptance gaps, so the full pipeline must not be marked complete solely from local tests or a successful deployment.
 
 Local verification on 2026-10-25: 71 tests passed (11 FLF regressions, 33 script/client tests, 3 subtitle/ASR tests, 5 Python input-safety tests, 8 workerd integration tests, 11 browser tests). Root/Worker/GPU typechecks and production build passed. Deployment smoke checks verified anonymous projects/media and wrong GPU keys return 401; the correct GPU key reaches the empty queue. This is not a real GPU rendering acceptance test.
+
+
+## Continuity implementation reference
+
+The optional node pack is fetched separately from [H3 Motion Context revision 518c083](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context/tree/518c083d11d80fa5920222ad89889924ee4401c9) (GPL-3.0). Upstream code is not copied into this repository. The graph builder is covered by tests for both sampling passes, preservation of image/voice references, AV trimming, cycle-free links, first-clip behavior and frame limits. These graph checks do not establish perceptual continuity quality.
+
+Latest local verification: 88 tests (11 FLF, 33 script/client, 14 GPU helper, 5 Python safety, 11 workerd, 11 browser, 3 real FFmpeg integration), plus root/Worker/GPU typechecks. The earlier 71-test result above records the initial deployment. Access placeholders and GPU quality acceptance remain pending.

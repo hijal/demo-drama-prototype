@@ -360,9 +360,9 @@ H3 audio is **32 kHz** — when mixing in a music track, resample explicitly (`a
 6. **Model bake-off:** run fixer on jungle Episode 01 locally in Colab with Qwen3.6-27B and Qwen3.5-9B, one loaded at a time; compare validity (0 errors), faithfulness (no story changes), and quality of invented character descriptions. Record the winner in §4.
 **Done when:** all 3 scripts end with 0 validation errors after fixing; owner reads the jungle Episode 01 result and agrees.
 
-**Implementation update (2026-10-25):** `docs/SCRIPT_FORMAT.md`, both synthetic templates, `worker/src/script/*`, `worker/src/llm/{colab,fixer}.ts`, CLI `worker/scripts/fix.ts`, and model-comparison CLI `worker/scripts/bakeoff.ts` exist. Run `npm --prefix worker ci` (Node 22.12+; Node 24 recommended), `npm run test:pipeline`, `npm run typecheck:pipeline`. Private script files are read in place, never copied into the repo. `--dry-run` makes canonical text + a report without inference. For series, live repair requires `--episode N`; carry the approved shared cast descriptions between episodes. E11 flags unsupported syntax and E12 rejects changed dialogue/scene/episode structure. Successful validation always still requires owner approval. Local-only adapter refuses remote endpoints and redirects; HF_TOKEN is not used for inference. CLI runs inside Colab next to the local model server. Use separate fix runs when switching models; compare accepts only already-loaded local models. No winner chosen and no inference calls made yet. Model serving/GPU integration is still pending; see COLAB_LLM.md.
+**Implementation update (2026-10-25):** `docs/SCRIPT_FORMAT.md`, both synthetic templates, `worker/src/script/*`, `worker/src/llm/{colab,fixer}.ts`, CLI `worker/scripts/fix.ts`, and model-comparison CLI `worker/scripts/bakeoff.ts` exist. Run `npm --prefix worker ci` (Node 22.12+; Node 24 recommended), `npm run test:pipeline`, `npm run typecheck:pipeline`. Private script files are read in place, never copied into the repo. `--dry-run` makes canonical text + a report without inference. For series, live repair requires `--episode N`; carry the approved shared cast descriptions between episodes. E11 flags unsupported syntax and E12 rejects changed dialogue/scene/episode structure. Successful validation always still requires owner approval. Local-only adapter refuses remote endpoints and redirects; HF_TOKEN is not used for inference. CLI runs inside Colab next to the local model server. Use separate fix runs when switching models; the bundled local server switches supported candidates on demand. No winner is chosen and no GPU evaluation has run yet. Model serving and GPU integration are implemented; real GPU acceptance remains pending; see COLAB_LLM.md.
 
-### Phase 2 — Cloudflare backend + UI shell  (status: IN PROGRESS — existing frontend migrated; Cloudflare backend pending)
+### Phase 2 — Cloudflare backend + UI shell  (status: IN PROGRESS — existing frontend migrated; backend deployed; owner login verification pending)
 1. `wrangler` project in `worker/`; bindings: D1 `DB`, R2 `MEDIA`, DO `LOGHUB`, secret `GPU_KEY`. Static assets from `web/dist`.
 2. D1 migration (§5.2), API: projects CRUD, script upload → fix (async job, LLM runs in Colab), approve, assets list, scenes list, jobs, presigned R2 URLs.
 3. LogHub DO: `POST /log` appends + broadcasts; `GET /ws?project=` WebSocket; keep last 500 lines.
@@ -372,13 +372,13 @@ H3 audio is **32 kHz** — when mixing in a music track, resample explicitly (`a
 **Done when:** owner uploads a script on the live URL, sees fixed script + change list, approves it; logs stream live.
 Note: the owner's Cloudflare login for wrangler is needed (`npx wrangler login`, owner clicks Allow).
 
-### Phase 3 — Colab GPU worker  (status: NOT STARTED)
+### Phase 3 — Colab GPU worker  (status: IN PROGRESS — implemented; GPU acceptance pending)
 1. `gpu/src/main.ts`: heartbeat, claim loop, job handlers, log forwarding, R2 upload via presigned PUT, idle exit.
 2. Handler `clip`: download refs → `uploadImage` to ComfyUI → `buildMiniMaxH3Workflow` (mode ref/t2v, targetDimensions 1080p) → submit → poll → upload mp4.
 3. Notebook: keep Steps 1–6 (they work), add Klein model + new custom nodes to Steps 4/6, replace Step 7 with "start GPU worker" (env: `STUDIO_URL`, `GPU_KEY` via Colab secrets panel, NOT pasted in a cell), keep idle auto-delete of runtime.
 **Done when:** a scene queued from the UI renders on Colab and plays in the UI from R2.
 
-### Phase 4 — Character / location reference sheets  (status: NOT STARTED)
+### Phase 4 — Character / location reference sheets  (status: IN PROGRESS — implemented; GPU acceptance pending)
 1. Klein 9B portrait from the character spec (text → image), white/neutral background, full body + face. Edit: Klein image-edit with the owner's instruction on the previous version (keeps identity). Recreate: new seed.
 2. Turnaround + voice: **ComfyUI-OrbitSheets** (MIT) "Character Turnaround Prompt (H3)" + "Frame Select" (+ local Colab VLM judge) → 5 views + contact sheet + **voice sample**. Alternative for stills-only sheet: `muse-character-sheet-klein` (needs ComfyUI-RMBG; Klein 9B ≈ 29 GB VRAM).
 3. Locations: Klein anchor still → OrbitSheets location sheet (front/right/rear/left).
@@ -386,7 +386,7 @@ Note: the owner's Cloudflare login for wrangler is needed (`npx wrangler login`,
 5. UI Cast screen with approve/change/recreate + voice player.
 **Done when:** jungle Episode 01 cast (Gajju, Bunty, Sher Singh, animals) approved by owner.
 
-### Phase 5 — Automatic scene prompts, QA, regeneration, voices, chaining  (status: NOT STARTED)
+### Phase 5 — Automatic scene prompts, QA, regeneration, voices, chaining  (status: IN PROGRESS — implemented; GPU acceptance pending)
 1. `prompt-writer` LLM: approved script scene + approved asset descriptions + reference slot map → H3 Ref2VA prompt (Appendix A style). Deterministic reference picking: location sheet view + each cast member's best view (≤9 images) + each speaking character's voice sample as `<Audio N>` (≤3).
 2. Clips rendered with `non_diegetic_music: N/A`.
 3. QA job = **visual + audio**, result `{pass, issues[], fix_hint, scores}`; fail ⇒ new take with fix_hint merged into prompt (max 2 auto retakes) ⇒ then flag for owner.
@@ -399,7 +399,7 @@ Note: the owner's Cloudflare login for wrangler is needed (`npx wrangler login`,
 5. Chaining: scenes with same `AT` location and `TRANSITION: cut` in sequence form a `chain_group`; test **ComfyUI-H3-Motion-Context** (GPL-3; `context_length` 22, `audio_context_length` 18; resolution must match; quality drifts down long chains — cap chain length ~4) vs **ComfyUI_MiniMaxH3_Director** (Apache-2.0, inter-segment guidance). Keep the better one.
 **Done when:** "The Stir" (burrito script) renders end-to-end with ≤1 owner action per scene.
 
-### Phase 6 — Assembly, music, subtitles, final player  (status: NOT STARTED)
+### Phase 6 — Assembly, music, subtitles, final player  (status: IN PROGRESS — implemented; GPU acceptance pending)
 1. `assemble` job on GPU worker: approved takes in order, transitions, actual durations (ffprobe, §7.2), one music track (owner-uploaded mp3 or generated later), duck under dialogue, 1080p H.264 + AAC 48 kHz (resample H3's 32 kHz audio).
 2. **Subtitles from what was actually spoken:** use each clip's ASR word timestamps (from QA) + the clip's real start offset in the final timeline; text = the script line (correct spelling) aligned to the ASR timing (fall back to script `at:` only if ASR found no speech). Optional burn-in.
 3. UI Final screen: player + download mp4/srt; per episode and whole film/series.
@@ -462,10 +462,10 @@ If the next AI cannot read `~/Downloads`, ask the owner to attach the files.
 | 0 Research & plan | DONE | 2026-10-25 | This document |
 | 1 Script format/parser/validator/fixer | IN PROGRESS | 2026-10-25 | Core code, docs/templates, private-input and mocked local-client tests implemented. Owner chose Colab-only; no paid provider calls. Local model serving, GPU evaluation and owner approval pending. Download token stays ignored. |
 | 2 Cloudflare backend + UI | IN PROGRESS | 2026-10-25 | Svelte projects/review UI, D1/R2/DO backend and deployment implemented; local runtime/browser tests pass. Owner chose Dashboard Access setup; real login verification pending. |
-| 3 Colab GPU worker | IN PROGRESS | 2026-10-25 | Notebook, serial polling/leases/cancellation, local model server and model release implemented. Actual Colab execution pending. |
+| 3 Colab GPU worker | IN PROGRESS | 2026-10-25 | Notebook, serial polling/leases/cancellation, local model server and model release implemented. Multipart media upload, preflight and attempt-specific local cleanup added. Actual Colab execution pending. |
 | 4 Reference sheets | IN PROGRESS | 2026-10-25 | Klein views/variants/editing, H3 voice samples and version approval implemented; GPU quality verification pending. |
-| 5 Prompts/QA/regenerate/voice/chaining | IN PROGRESS | 2026-10-25 | Prompt, VLM/ASR/voice QA and retakes implemented. Voice calibration/lip sync need owner review; reference-video continuity implemented, latent Motion Context pending. |
-| 6 Assembly/music/subtitles/player | IN PROGRESS | 2026-10-25 | FFmpeg assembly, music ducking, ASR-timed SRT, preview/download implemented. Real codec/assembly verification in Colab pending. |
+| 5 Prompts/QA/regenerate/voice/chaining | IN PROGRESS | 2026-10-25 | Prompt, VLM/ASR/voice QA and retakes implemented. Voice calibration/lip sync need owner review; Reference-video and paired low/high latent Motion Context implemented; actual GPU continuity/Director comparison pending. |
+| 6 Assembly/music/subtitles/player | IN PROGRESS | 2026-10-25 | FFmpeg assembly, music ducking, ASR-timed SRT, preview/download implemented. Real CPU codec, cut/fade, music ducking and SRT/burn-in tests pass; actual H3 episode acceptance in Colab pending. |
 
 ---
 

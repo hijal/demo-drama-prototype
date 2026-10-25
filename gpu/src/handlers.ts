@@ -3,6 +3,8 @@ import { join, basename } from "node:path";
 import { fixScript } from "../../worker/src/llm/fixer";
 import { ColabClient } from "../../worker/src/llm/colab";
 import type { Scene, Asset } from "../../worker/src/script/types";
+import { outputSubfolder } from "./workspace";
+import { canLatentChain } from "./motion";
 import { render, upload, releaseComfy } from "./comfy";
 import { command, download, inlineImage, probe } from "./io";
 import { alignDialogue, subtitles, type Line, type Word } from "./qa";
@@ -199,6 +201,7 @@ async function asset(c: Context) {
         mode: refImages.length ? "ref" : "t2v",
         refImages,
         aspectRatio: "16:9",
+        outputSubfolder: outputSubfolder(c.job),
         duration: 4,
         targetDimensions: { width: 1280, height: 720 },
         seed: Math.floor(Math.random() * 2147483647),
@@ -221,6 +224,30 @@ async function clip(c: Context) {
   const p = c.job.payload,
     scene = p.scene as Scene,
     speech = lines(scene);
+  const strategy = process.env.CONTINUITY_STRATEGY || "reference-video";
+  if (!["latent", "reference-video"].includes(strategy))
+    throw new Error("Invalid continuity strategy");
+  const stored = p.context?.params_json
+    ? JSON.parse(p.context.params_json).contextLatents
+    : null;
+  const latentChain =
+    strategy === "latent" &&
+    !!stored?.low &&
+    !!stored?.high &&
+    canLatentChain(scene.duration);
+  const headSeconds = latentChain ? 22 / 24 : 0;
+  const motion: import("./motion").MotionContext | undefined =
+    strategy === "latent" ? { enabled: true } : undefined;
+  if (latentChain && motion) {
+    motion.low = await upload(
+      await media(c, stored.low, "previous-low.safetensors"),
+      c.signal,
+    );
+    motion.high = await upload(
+      await media(c, stored.high, "previous-high.safetensors"),
+      c.signal,
+    );
+  }
   await c.progress(5, "Writing scene prompt");
   const visual = structured(
     await chat(
@@ -299,22 +326,25 @@ async function clip(c: Context) {
   const dialogue = speech
     .map(
       (line) =>
-        `At ${line.at.toFixed(2)} seconds, ${slots.has(line.speaker) ? `<Subject ${slots.get(line.speaker)}>` : line.speaker} (S${speakerOrder.indexOf(line.speaker) + 1}) ${voices.has(line.speaker) ? `using <Audio ${voices.get(line.speaker)}> as voice-timbre reference` : ""} says exactly: <d>[English] ${line.text}</d>.`,
+        `At ${(line.at + headSeconds).toFixed(2)} seconds, ${slots.has(line.speaker) ? `<Subject ${slots.get(line.speaker)}>` : line.speaker} (S${speakerOrder.indexOf(line.speaker) + 1}) ${voices.has(line.speaker) ? `using <Audio ${voices.get(line.speaker)}> as voice-timbre reference` : ""} says exactly: <d>[English] ${line.text}</d>.`,
     )
     .join("\n");
   let refVideos: Array<{ path: string; includeAudio: boolean }> | undefined;
-  if (p.context?.r2_key) {
+  if (p.context?.r2_key && !latentChain) {
     const context = await media(c, p.context.r2_key, "context.mp4");
     refVideos = [{ path: await upload(context, c.signal), includeAudio: true }];
     definitions.push(
       "<Video 1> is the preceding approved scene; preserve its final pose, camera axis and ambience across this cut.",
     );
   }
-  const prompt = `subject_definitions:\n${definitions.join("\n")}\nsummary:\n[reference generation + audio reference] ${scene.title}\nretention_analysis:\nPreserve every referenced identity, clothing, location and voice.\ndetailed_description:\n${visual.visual}\n${dialogue}\nNo text anywhere in frame.\noverall_soundscape:\n${visual.soundscape}\nnon_diegetic_music: N/A`;
+  const prompt = `subject_definitions:\n${definitions.join("\n")}\nsummary:\n[reference generation + audio reference] ${scene.title}\nretention_analysis:\nPreserve every referenced identity, clothing, location and voice.\ndetailed_description:\n${latentChain ? "The first 22 frames are pinned context. Begin this scene and its timed dialogue after that head. " : ""}${visual.visual}\n${dialogue}\nNo text anywhere in frame.\noverall_soundscape:\n${visual.soundscape}\nnon_diegetic_music: N/A`;
   await local("/release", {}, c.signal);
   const params = {
     prompt,
-    mode: refImages.length ? ("ref" as const) : ("t2v" as const),
+    mode:
+      refImages.length || refVideos?.length
+        ? ("ref" as const)
+        : ("t2v" as const),
     refImages,
     refVideos,
     refAudios,
@@ -329,16 +359,39 @@ async function clip(c: Context) {
     firstSamplerSteps: 4,
     sigmaVariant: "3step",
     refImageSize: "max" as const,
-    outputSubfolder: `pipeline_${c.job.id.replace(/[^\w-]/g, "_")}_a${c.job.attempt}`,
+    outputSubfolder: outputSubfolder(c.job),
   };
-  const result = await render(params, c.folder, c.signal, c.progress);
+  if (latentChain)
+    await c.progress(
+      8,
+      "Continuing approved low/high AV latents; pinned head will be trimmed",
+    );
+  const result = await render(params, c.folder, c.signal, c.progress, motion);
+  const files = result.contextFiles
+    ? {
+        contextLow: await c.upload(
+          result.contextFiles.low,
+          "context-low.safetensors",
+        ),
+        contextHigh: await c.upload(
+          result.contextFiles.high,
+          "context-high.safetensors",
+        ),
+      }
+    : undefined;
   return {
     key: await c.upload(result.path, "clip.mp4"),
+    files,
     prompt,
     params: {
       ...params,
       actualDuration: result.duration,
-      continuityStrategy: refVideos ? "reference-video" : "none",
+      continuityStrategy: latentChain
+        ? "latent"
+        : refVideos
+          ? "reference-video"
+          : "none",
+      contextHeadSeconds: headSeconds,
     },
   };
 }
@@ -504,7 +557,7 @@ async function qa(c: Context) {
     voiceThreshold: threshold,
   };
 }
-async function assemble(c: Context) {
+export async function assemble(c: Context) {
   const p = c.job.payload,
     clips: Array<{
       path: string;
@@ -533,6 +586,8 @@ async function assemble(c: Context) {
         `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1`,
         "-af",
         "aresample=48000",
+        "-pix_fmt",
+        "yuv420p",
         "-c:v",
         "libx264",
         "-crf",
@@ -565,6 +620,11 @@ async function assemble(c: Context) {
       scene: item.scene,
     });
   }
+  for (let i = 0; i < clips.length - 1; i++)
+    clips[i].transition = Math.min(
+      clips[i].transition,
+      clips[i + 1].duration / 2,
+    );
   const srt = join(c.folder, "final.srt");
   await writeFile(
     srt,
@@ -606,6 +666,8 @@ async function assemble(c: Context) {
         "[v]",
         "-map",
         "[a]",
+        "-pix_fmt",
+        "yuv420p",
         "-c:v",
         "libx264",
         "-crf",
@@ -633,7 +695,7 @@ async function assemble(c: Context) {
       "-i",
       music,
       "-filter_complex",
-      "[0:a]aresample=48000,asplit=2[voice][side];[1:a]aresample=48000,volume=0.18[music];[music][side]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[ducked];[voice][ducked]amix=inputs=2:duration=first:normalize=0[a]",
+      "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=2[voice][side];[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=0.18[music];[music][side]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[ducked];[voice][ducked]amix=inputs=2:duration=first:normalize=0[a]",
       "-map",
       "0:v",
       "-map",
@@ -645,6 +707,10 @@ async function assemble(c: Context) {
   args.push(
     "-t",
     String(total),
+    "-pix_fmt",
+    "yuv420p",
+    "-pix_fmt",
+    "yuv420p",
     "-c:v",
     "libx264",
     "-crf",

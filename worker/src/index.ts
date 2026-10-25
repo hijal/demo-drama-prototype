@@ -7,6 +7,7 @@ import {
   getProject,
   enqueue,
   expireLeases,
+  cleanupUploads,
   reconcileTerminalJobs,
   assert,
   HttpError,
@@ -15,6 +16,7 @@ import {
   json,
   approveClip,
   invalidateRendersSQL,
+  invalidateDependentClipsSQL,
 } from "./db";
 import { approveScript, queueClip, scheduleNext } from "./planning";
 import { faithfulness } from "./llm/fixer";
@@ -66,7 +68,7 @@ function mediaKey(
   name: string,
 ) {
   assert(
-    /^[a-zA-Z0-9_-]+\.(mp4|png|jpg|wav|mp3|srt|json)$/.test(name),
+    /^[a-zA-Z0-9_-]+\.(mp4|png|jpg|wav|mp3|srt|json|safetensors)$/.test(name),
     400,
     "Invalid output file name",
   );
@@ -86,11 +88,17 @@ async function activeJob(env: Env, jobId: string, token: string) {
 }
 async function gpu(request: Request, env: Env, parts: string[]) {
   assert(
-    request.method === (parts[2] === "files" ? "PUT" : "POST"),
+    request.method ===
+      (parts[2] === "files" ||
+      (parts[2] === "multipart" && /^\d+$/.test(parts[5] || ""))
+        ? "PUT"
+        : "POST"),
     405,
     "Method not allowed",
   );
   const data = request.method === "PUT" ? {} : await body(request);
+  if (parts[0] === "health")
+    return ok({ ok: true, protocol: 2, maxPartBytes: 16 * 1024 * 1024 });
   if (parts[0] === "heartbeat") {
     assert(
       typeof data.workerId === "string" && data.workerId.length < 120,
@@ -104,13 +112,8 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       now(),
       json(data.info || {}),
     ).run();
-    await query(
-      env,
-      "UPDATE jobs SET lease_until=? WHERE claimed_by=? AND status IN ('claimed','running') AND lease_until>?",
-      now() + 600000,
-      data.workerId,
-      now(),
-    ).run();
+    // Known active jobs renew through their claim-token progress heartbeat.
+    // A worker ID alone must not keep a lost claim alive indefinitely.
     return ok({ ok: true });
   }
   if (parts[0] === "claim") {
@@ -120,6 +123,7 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       "Worker ID required",
     );
     await expireLeases(env);
+    await cleanupUploads(env);
     const job = await query(
       env,
       "UPDATE jobs SET status='claimed',claimed_by=?,claimed_at=?,claim_token=?,lease_until=?,attempt=attempt+1,updated_at=? WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY priority DESC,created_at,id LIMIT 1) AND status='queued' RETURNING *",
@@ -151,6 +155,89 @@ async function gpu(request: Request, env: Env, parts: string[]) {
   }
   const job = await activeJob(env, jobId, token),
     payload = JSON.parse(job.payload_json);
+  if (parts[2] === "multipart") {
+    const key = mediaKey(job.project_id, jobId, job.attempt, parts[3] || "");
+    if (!parts[4]) {
+      const upload = await env.MEDIA.createMultipartUpload(key, {
+        httpMetadata: {
+          contentType: String(data.contentType || "application/octet-stream"),
+        },
+      });
+      try {
+        await query(
+          env,
+          "INSERT INTO job_uploads (object_key,upload_id,job_id,attempt,created_at) VALUES (?,?,?,?,?)",
+          key,
+          upload.uploadId,
+          jobId,
+          job.attempt,
+          now(),
+        ).run();
+      } catch (error) {
+        await upload.abort();
+        throw error;
+      }
+      return ok({ uploadId: upload.uploadId, key });
+    }
+    const record = await one(
+      env,
+      "SELECT * FROM job_uploads WHERE object_key=? AND upload_id=? AND job_id=? AND attempt=?",
+      key,
+      parts[4],
+      jobId,
+      job.attempt,
+    );
+    assert(record, 404, "Upload not found for this claim");
+    const upload = env.MEDIA.resumeMultipartUpload(key, parts[4]);
+    if (parts[5] === "complete") {
+      if (record.status === "done") return ok({ key });
+      assert(
+        Array.isArray(data.parts) &&
+          data.parts.length > 0 &&
+          data.parts.length <= 10000 &&
+          data.parts.every(
+            (part: any, index: number) =>
+              part.partNumber === index + 1 &&
+              typeof part.etag === "string" &&
+              part.etag.length <= 256,
+          ),
+        400,
+        "Ordered upload parts required",
+      );
+      await upload.complete(data.parts);
+      await query(
+        env,
+        "UPDATE job_uploads SET status='done' WHERE object_key=? AND upload_id=?",
+        key,
+        parts[4],
+      ).run();
+      return ok({ key });
+    }
+    if (parts[5] === "abort") {
+      if (record.status === "active") await upload.abort();
+      await query(
+        env,
+        "DELETE FROM job_uploads WHERE object_key=? AND upload_id=?",
+        key,
+        parts[4],
+      ).run();
+      return ok({ ok: true });
+    }
+    const number = Number(parts[5]),
+      length = Number(request.headers.get("Content-Length"));
+    assert(record.status === "active", 409, "Upload already completed");
+    assert(
+      Number.isInteger(number) && number >= 1 && number <= 10000,
+      400,
+      "Invalid part number",
+    );
+    assert(
+      request.body && length > 0 && length <= 16 * 1024 * 1024,
+      413,
+      "Upload parts must be 1 byte to 16 MiB with Content-Length",
+    );
+    return ok(await upload.uploadPart(number, request.body));
+  }
   if (parts[2] === "files") {
     const key = mediaKey(job.project_id, jobId, job.attempt, parts[3] || "");
     assert(request.method === "PUT" && request.body, 405, "PUT body required");
@@ -198,6 +285,7 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       token,
     ).run();
     await reconcileTerminalJobs(env);
+    await cleanupUploads(env);
     if (job.attempt >= 3 && ["clip", "qa"].includes(job.type))
       await query(
         env,
@@ -334,6 +422,11 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       ),
     );
   } else if (job.type === "clip") {
+    assert(
+      !!result.files?.contextLow === !!result.files?.contextHigh,
+      422,
+      "Both context latents are required",
+    );
     assert(typeof result.key === "string", 422, "Clip video output required");
     statements.push(
       query(
@@ -341,7 +434,14 @@ async function gpu(request: Request, env: Env, parts: string[]) {
         `UPDATE clips SET r2_key=?,prompt=?,params_json=?,status=CASE WHEN script_version_id=(SELECT approved_script_id FROM projects WHERE id=?) THEN 'qa' ELSE 'stale' END WHERE id=? AND ${guard}`,
         result.key,
         String(result.prompt || ""),
-        json({ ...result.params, sceneHash: payload.sceneHash }),
+        json({
+          ...result.params,
+          sceneHash: payload.sceneHash,
+          contextLatents:
+            result.files?.contextLow && result.files?.contextHigh
+              ? { low: result.files.contextLow, high: result.files.contextHigh }
+              : null,
+        }),
         job.project_id,
         payload.clipId,
         ...args,
@@ -614,6 +714,7 @@ async function owner(request: Request, env: Env, parts: string[]) {
           asset.id,
           version.version,
         ),
+        query(env, invalidateDependentClipsSQL),
         query(env, invalidateRendersSQL),
       ]);
       return ok({ ok: true });
@@ -705,6 +806,7 @@ async function owner(request: Request, env: Env, parts: string[]) {
       projectId,
     ).run();
     await reconcileTerminalJobs(env);
+    await cleanupUploads(env);
     await query(
       env,
       "UPDATE projects SET auto_episode=NULL WHERE id=?",
@@ -857,5 +959,6 @@ export default {
   },
   async scheduled(_event: ScheduledController, env: Env) {
     await expireLeases(env);
+    await cleanupUploads(env);
   },
 } satisfies ExportedHandler<Env>;

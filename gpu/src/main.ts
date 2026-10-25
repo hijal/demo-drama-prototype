@@ -1,8 +1,9 @@
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { existsSync } from "node:fs";
+import { cleanOutputs, cleanInputs } from "./workspace";
+import { uploadArtifact } from "./artifacts";
 import { execute, local, type Job } from "./handlers";
-import { delay, comfy } from "./comfy";
+import { delay, comfy, waitIdle, takeUploadedInputs } from "./comfy";
 const root = resolve(process.env.PIPELINE_WORK_DIR || "/content/drama-runtime");
 const studio = (process.env.STUDIO_URL || "").replace(/\/+$/, "");
 const key = process.env.GPU_KEY || "";
@@ -36,7 +37,9 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-GPU-Key": key },
       body: JSON.stringify(payload),
-      signal: signal || AbortSignal.timeout(30000),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(30000)])
+        : AbortSignal.timeout(30000),
       redirect: "error",
     });
     if (!r.ok)
@@ -71,11 +74,22 @@ async function main() {
   const timer = setInterval(() => void heartbeat(), 15000);
   try {
     while (!stop.signal.aborted) {
-      const { job } = (await request(
-        "/api/gpu/claim",
-        { workerId },
-        stop.signal,
-      )) as { job: Job | null };
+      let job: Job | null;
+      try {
+        ({ job } = await request("/api/gpu/claim", { workerId }, stop.signal));
+      } catch (error) {
+        if (stop.signal.aborted) break;
+        if ([401, 403].includes((error as any).status)) throw error;
+        if (Date.now() - lastWork > idleMinutes * 60000) {
+          console.log(
+            "Studio unreachable past idle timeout; stopping GPU worker",
+          );
+          break;
+        }
+        console.log("Studio temporarily unreachable; retrying claim");
+        await delay(5000, stop.signal);
+        continue;
+      }
       if (!job) {
         if (Date.now() - lastWork > idleMinutes * 60000) {
           console.log("GPU worker idle timeout reached");
@@ -120,33 +134,18 @@ async function main() {
           studio,
           key,
           progress,
-          upload: async (path, name) => {
-            signal.throwIfAborted();
-            const bytes = await readFile(path);
-            const response = await fetch(
-              `${studio}/api/gpu/jobs/${job.id}/files/${encodeURIComponent(name)}`,
+          upload: (path, name) =>
+            uploadArtifact(
               {
-                method: "PUT",
-                headers: {
-                  "X-GPU-Key": key,
-                  "X-Claim-Token": job.claim_token,
-                  "Content-Type": name.endsWith(".mp4")
-                    ? "video/mp4"
-                    : name.endsWith(".png")
-                      ? "image/png"
-                      : name.endsWith(".wav")
-                        ? "audio/wav"
-                        : "text/plain",
-                },
-                body: bytes,
+                studio,
+                key,
+                jobId: job.id,
+                claimToken: job.claim_token,
                 signal,
-                redirect: "error",
               },
-            );
-            if (!response.ok)
-              throw new Error(`Result upload failed (${response.status})`);
-            return ((await response.json()) as { key: string }).key;
-          },
+              path,
+              name,
+            ),
         });
         signal.throwIfAborted();
         await request(
@@ -168,6 +167,13 @@ async function main() {
         await comfy("/free", { unload_models: true, free_memory: true }).catch(
           () => {},
         );
+        if (process.env.COMFY_OUTPUT_DIR || process.env.COMFY_INPUT_DIR)
+          await waitIdle(AbortSignal.timeout(60000))
+            .then(async () => {
+              await cleanOutputs(job);
+              await cleanInputs(takeUploadedInputs());
+            })
+            .catch(() => {});
         await rm(folder, { recursive: true, force: true });
         lastWork = Date.now();
       }

@@ -11,6 +11,7 @@ import {
   json,
   enqueue,
   invalidateRendersSQL,
+  invalidateDependentClipsSQL,
 } from "./db";
 import type { Scene, Script } from "./script/types";
 export function semanticJSON(value: unknown): string {
@@ -115,11 +116,6 @@ export async function approveScript(
       ),
     );
   }
-  const old = await all(
-    env,
-    "SELECT s.* FROM scenes s JOIN episodes e ON e.id=s.episode_id WHERE e.project_id=?",
-    projectId,
-  );
   for (const episode of ast.episodes) {
     const episodeId = `${projectId}:ep${episode.number}`;
     statements.push(
@@ -191,6 +187,15 @@ export async function approveScript(
       );
     }
   }
+  statements.push(
+    query(
+      env,
+      `UPDATE clips SET status='stale' WHERE scene_id IN (SELECT s.id FROM scenes s JOIN episodes e ON e.id=s.episode_id WHERE e.project_id=? AND s.script_version_id!=?) AND ${guard}`,
+      projectId,
+      versionId,
+      ...args,
+    ),
+  );
   // A changed description invalidates every take that pinned that asset.
   statements.push(
     query(
@@ -200,6 +205,7 @@ export async function approveScript(
       ...args,
     ),
   );
+  statements.push(query(env, invalidateDependentClipsSQL));
   statements.push(query(env, invalidateRendersSQL));
   const result = await env.DB.batch(statements);
   assert(result[0].meta.changes === 1, 409, "Project changed during approval");
@@ -246,7 +252,7 @@ export async function queueClip(
   );
   const previous = await one(
     env,
-    "SELECT s.approved_clip_id,c.r2_key,c.status FROM scenes s LEFT JOIN clips c ON c.id=s.approved_clip_id WHERE s.episode_id=? AND s.number=? AND s.chain_group=?",
+    "SELECT s.approved_clip_id,c.r2_key,c.status,c.params_json FROM scenes s LEFT JOIN clips c ON c.id=s.approved_clip_id WHERE s.episode_id=? AND s.number=? AND s.chain_group=?",
     s.episode_id,
     s.number - 1,
     s.chain_group,

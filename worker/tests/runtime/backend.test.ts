@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, expect, test } from "vitest";
 import { Miniflare } from "miniflare";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { film, loose } from "../fixtures";
 let mf: Miniflare;
@@ -52,7 +52,14 @@ beforeAll(async () => {
     ],
   });
   const db = await mf.getD1Database("DB");
-  const schema = await readFile("migrations/0001_pipeline.sql", "utf8");
+  const schema = (
+    await Promise.all(
+      (await readdir("migrations"))
+        .filter((name) => name.endsWith(".sql"))
+        .sort()
+        .map((name) => readFile(`migrations/${name}`, "utf8")),
+    )
+  ).join("\n");
   for (const sql of schema.split(";").filter((s) => s.trim()))
     await db.prepare(sql).run();
 }, 30000);
@@ -240,7 +247,21 @@ test("uploaded assets, clip QA, final assembly and stale propagation work end-to
   );
   const clipJob = await claim();
   const video = await put(clipJob, "clip.mp4", "video/mp4");
-  await done(clipJob, { key: video, prompt: "Synthetic prompt" });
+  const contextLow = await put(
+      clipJob,
+      "context-low.safetensors",
+      "application/octet-stream",
+    ),
+    contextHigh = await put(
+      clipJob,
+      "context-high.safetensors",
+      "application/octet-stream",
+    );
+  await done(clipJob, {
+    key: video,
+    prompt: "Synthetic prompt",
+    files: { contextLow, contextHigh },
+  });
   const qaJob = await claim();
   expect(qaJob.type).toBe("qa");
   await done(qaJob, { pass: true, issues: [], words: [], alignedLines: [] });
@@ -257,6 +278,10 @@ test("uploaded assets, clip QA, final assembly and stale propagation work end-to
   });
   detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
   expect(detail.renders[0].status).toBe("ready");
+  expect(JSON.parse(detail.clips[0].params_json).contextLatents).toEqual({
+    low: contextLow,
+    high: contextHigh,
+  });
   expect(detail.scenes[0].approved_clip_id).toBe(clipJob.payload.clipId);
   await request(`/api/projects/${p.id}/scripts`, { body: "\n" + film });
   let edited = (await (await request(`/api/projects/${p.id}`)).json()) as any;
@@ -389,5 +414,168 @@ test("character reference completion requires both portrait and voice", async ()
       )
     ).status,
   ).toBe(422);
+  await request(`/api/projects/${p.id}/jobs/${job.id}/cancel`, {});
+});
+
+test("multipart artifacts stream into private R2 and cancelled claims cannot upload another part", async () => {
+  const p = await project();
+  await request(`/api/projects/${p.id}/scripts`, { body: film, fix: true });
+  const { job } = (await (
+    await request("/api/gpu/claim", { workerId: "multipart" }, "POST", gpu)
+  ).json()) as any;
+  const base = `/api/gpu/jobs/${job.id}/multipart/context-high.safetensors`;
+  const start = await request(
+    base,
+    { claim_token: job.claim_token, contentType: "application/octet-stream" },
+    "POST",
+    gpu,
+  );
+  expect(start.status).toBe(200);
+  const { uploadId, key } = (await start.json()) as any;
+  async function part(number: number, size: number) {
+    const response = await mf.dispatchFetch(
+      `http://studio.test${base}/${encodeURIComponent(uploadId)}/${number}`,
+      {
+        method: "PUT",
+        headers: {
+          "X-GPU-Key": "test-gpu-secret",
+          "X-Claim-Token": job.claim_token,
+          "Content-Length": String(size),
+        },
+        body: new Uint8Array(size).fill(number),
+      },
+    );
+    expect(response.status).toBe(200);
+    return response.json();
+  }
+  const parts = [await part(1, 5 * 1024 * 1024), await part(2, 32)];
+  const complete = () =>
+    request(
+      `${base}/${encodeURIComponent(uploadId)}/complete`,
+      { claim_token: job.claim_token, parts },
+      "POST",
+      gpu,
+    );
+  expect((await complete()).status).toBe(200);
+  expect((await complete()).status).toBe(200);
+  const object = await (await mf.getR2Bucket("MEDIA")).get(key);
+  expect(object?.size).toBe(5 * 1024 * 1024 + 32);
+  const next = await request(
+    base,
+    { claim_token: job.claim_token },
+    "POST",
+    gpu,
+  );
+  const nextUpload = (await next.json()) as any;
+  await request(`/api/projects/${p.id}/jobs/${job.id}/cancel`, {});
+  const denied = await mf.dispatchFetch(
+    `http://studio.test${base}/${encodeURIComponent(nextUpload.uploadId)}/1`,
+    {
+      method: "PUT",
+      headers: {
+        "X-GPU-Key": "test-gpu-secret",
+        "X-Claim-Token": job.claim_token,
+        "Content-Length": "1",
+      },
+      body: new Uint8Array(1),
+    },
+  );
+  expect(denied.status).toBe(409);
+  expect(
+    await (
+      await mf.getD1Database("DB")
+    )
+      .prepare("SELECT upload_id FROM job_uploads WHERE job_id=?")
+      .bind(job.id)
+      .first(),
+  ).toBeNull();
+});
+
+test("editing an earlier scene invalidates unchanged takes that depend on its motion context", async () => {
+  const p = await project(),
+    db = await mf.getD1Database("DB");
+  const scene = film.slice(film.indexOf("SCENE 1 |"));
+  const two = film + "\n" + scene.replace("SCENE 1 |", "SCENE 2 |");
+  await request(`/api/projects/${p.id}/scripts`, { body: two });
+  let detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
+  expect(
+    (
+      await request(`/api/projects/${p.id}/approve-script`, {
+        versionId: detail.scripts[0].id,
+        revision: 0,
+      })
+    ).status,
+  ).toBe(200);
+  detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
+  expect(detail.scenes).toHaveLength(2);
+  for (let i = 0; i < 2; i++) {
+    const clip = `${p.id}:take${i}`;
+    await db
+      .prepare(
+        "INSERT INTO clips (id,scene_id,take,asset_versions_json,context_clip_id,script_version_id,status,r2_key,created_at) VALUES (?,?,1,'{}',?,?,'ready','synthetic',0)",
+      )
+      .bind(
+        clip,
+        detail.scenes[i].id,
+        i ? `${p.id}:take0` : null,
+        detail.project.approved_script_id,
+      )
+      .run();
+    await db
+      .prepare("UPDATE scenes SET approved_clip_id=? WHERE id=?")
+      .bind(clip, detail.scenes[i].id)
+      .run();
+  }
+  await request(`/api/projects/${p.id}/scripts`, {
+    body: two.replace(
+      "SCENE 1 | 6s | Delivery",
+      "SCENE 1 | 6s | Changed delivery",
+    ),
+  });
+  detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
+  expect(
+    (
+      await request(`/api/projects/${p.id}/approve-script`, {
+        versionId: detail.scripts[0].id,
+        revision: detail.project.revision,
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      (await db
+        .prepare("SELECT status FROM clips WHERE id=?")
+        .bind(`${p.id}:take1`)
+        .first()) as any
+    ).status,
+  ).toBe("stale");
+});
+
+test("idle heartbeat cannot indefinitely renew a claim whose response the GPU lost", async () => {
+  const p = await project();
+  await request(`/api/projects/${p.id}/scripts`, { body: film, fix: true });
+  const { job } = (await (
+    await request("/api/gpu/claim", { workerId: "lost-response" }, "POST", gpu)
+  ).json()) as any;
+  const db = await mf.getD1Database("DB"),
+    lease = Date.now() + 5000;
+  await db
+    .prepare("UPDATE jobs SET lease_until=? WHERE id=?")
+    .bind(lease, job.id)
+    .run();
+  await request(
+    "/api/gpu/heartbeat",
+    { workerId: "lost-response" },
+    "POST",
+    gpu,
+  );
+  expect(
+    (
+      (await db
+        .prepare("SELECT lease_until FROM jobs WHERE id=?")
+        .bind(job.id)
+        .first()) as any
+    ).lease_until,
+  ).toBe(lease);
   await request(`/api/projects/${p.id}/jobs/${job.id}/cancel`, {});
 });

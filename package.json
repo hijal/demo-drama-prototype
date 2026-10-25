@@ -17,7 +17,8 @@
     "test:gpu": "npm --workspace gpu test",
     "typecheck:gpu": "npm --workspace gpu run typecheck",
     "test:backend": "npm --prefix worker run test:runtime",
-    "dev:pipeline": "npm --prefix worker run dev -- --port 8790"
+    "dev:pipeline": "npm --prefix worker run dev -- --port 8790",
+    "test:assembly": "npm --workspace gpu run test:assembly"
   },
   "dependencies": {
     "next": "^16.1.1",

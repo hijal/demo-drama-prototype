@@ -99,6 +99,7 @@ export async function reconcileTerminalJobs(env: Env) {
     ),
   ]);
 }
+export const invalidateDependentClipsSQL = `WITH RECURSIVE affected(id) AS (SELECT id FROM clips WHERE status='stale' UNION SELECT c.id FROM clips c JOIN affected a ON c.context_clip_id=a.id) UPDATE clips SET status='stale' WHERE status!='stale' AND id IN (SELECT id FROM affected)`;
 export const invalidateRendersSQL = `UPDATE renders SET status='stale' WHERE status='ready' AND EXISTS (SELECT 1 FROM json_each(renders.clip_ids_json) j JOIN clips c ON c.id=j.value JOIN scenes s ON s.id=c.scene_id WHERE c.status='stale' OR s.approved_clip_id IS NOT c.id)`;
 export async function approveClip(env: Env, projectId: string, clipId: string) {
   const clip = await one(
@@ -148,4 +149,30 @@ export async function approveClip(env: Env, projectId: string, clipId: string) {
     query(env, "UPDATE clips SET status='ready' WHERE id=?", clipId),
     query(env, invalidateRendersSQL),
   ]);
+}
+
+export async function cleanupUploads(env: Env) {
+  const uploads = await all(
+    env,
+    `SELECT u.* FROM job_uploads u JOIN jobs j ON j.id=u.job_id WHERE j.status NOT IN ('claimed','running') OR u.attempt!=j.attempt OR j.lease_until<? LIMIT 50`,
+    now(),
+  );
+  for (const upload of uploads) {
+    if (upload.status === "active") {
+      try {
+        await env.MEDIA.resumeMultipartUpload(
+          upload.object_key,
+          upload.upload_id,
+        ).abort();
+      } catch {
+        continue;
+      } // Retain the record so a transient R2 failure is retried later.
+    }
+    await query(
+      env,
+      "DELETE FROM job_uploads WHERE object_key=? AND upload_id=?",
+      upload.object_key,
+      upload.upload_id,
+    ).run();
+  }
 }
