@@ -65,8 +65,10 @@ export function validateScript(script: Script): Issue[] {
           const next = s.dialogue.map(e => seconds(e.options.at)).filter(t => t > start).sort((a, b) => a - b)[0] ?? s.duration
           if (d.text.trim().split(/\s+/).length > (next - start) * 2.7) add('W01', d.line, 'Dialogue may be too long for its available window; split it or extend the scene.', 'এই সময়ের তুলনায় সংলাপ বড়; সময় বাড়াও বা ভাগ করো।')
         }
-        if (!s.fields.KEYFRAME && !(shotIndex !== undefined && scene.fields.KEYFRAME)) add('W04', s.line, 'Missing KEYFRAME; the fixer should propose one.', 'KEYFRAME নেই; fixer একটি proposal দেবে।')
-        if (!s.fields.CAMERA && !(shotIndex !== undefined && scene.fields.CAMERA)) add('W04', s.line, 'Missing CAMERA; the fixer should propose one.', 'CAMERA নেই; fixer একটি proposal দেবে।')
+        // A scene with shots is framed by its shots; only rendered segments need KEYFRAME/CAMERA.
+        const rendered = shotIndex !== undefined || !scene.shots.length
+        if (rendered && !s.fields.KEYFRAME && !(shotIndex !== undefined && scene.fields.KEYFRAME)) add('W04', s.line, 'Missing KEYFRAME; the fixer should propose one.', 'KEYFRAME নেই; fixer একটি proposal দেবে।')
+        if (rendered && !s.fields.CAMERA && !(shotIndex !== undefined && scene.fields.CAMERA)) add('W04', s.line, 'Missing CAMERA; the fixer should propose one.', 'CAMERA নেই; fixer একটি proposal দেবে।')
       }
       if (!scene.shots.length) checkSegment(scene)
       else {

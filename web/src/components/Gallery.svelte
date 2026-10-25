@@ -347,7 +347,7 @@
                 ? "All videos from all folders"
                 : filter === ""
                   ? "Shared folder (no projects)"
-                  : `Folder "${filter}»`}{#if !$gallery.loading}
+                  : `Folder "${filter}"`}{#if !$gallery.loading}
                 · <span class="text-foreground/80 font-medium"
                   >{files.length}</span
                 > pcs.{/if}

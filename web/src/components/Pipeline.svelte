@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, message } from '../lib/api'
+  import { api, message, SIGN_IN_MESSAGE } from '../lib/api'
   import { toast } from '@/lib/notifications'
   import { parseScript } from '../../../worker/src/script/parse'
   import { diffLines } from '../../../worker/src/script/diff'
@@ -213,7 +213,7 @@
     <div class="eyebrow">SCRIPT → FINISHED VIDEO</div>
     <div class="section-head">
       <h1>Drama pipeline</h1>
-      <span class="badge">{gpuOnline ? 'Colab online' : 'GPU offline'}</span>
+      <span class="badge">{gpuOnline ? 'Colab online' : 'Colab offline'}</span>
     </div>
     <p>
       Review the script and references, then let the scene queue build your
@@ -230,12 +230,14 @@
     </div>{/if}
   {#if error}<p class="error" role="alert">
       {error}
-      <button
-        onclick={() => {
-          void list()
-          void load()
-        }}>Retry</button
-      >
+      {#if error === SIGN_IN_MESSAGE}<button onclick={() => location.reload()}
+          >Sign in</button
+        >{:else}<button
+          onclick={() => {
+            void list()
+            void load()
+          }}>Retry</button
+        >{/if}
     </p>{/if}
   <div class="project-toolbar">
     <label class="field"

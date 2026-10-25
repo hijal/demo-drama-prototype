@@ -535,7 +535,7 @@
           24 fps · from {(minFrames / 24).toFixed(1)} up to {(
             maxFrames / 24
           ).toFixed(1)} s · alignment 17n+5 · maximum 30 s · manual input: {minFrames}–{maxFrames}
-          frame.
+          frames.
         </p>
       </div>
       <div class="h-px w-full shrink-0 bg-border opacity-50"></div>

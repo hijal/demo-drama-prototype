@@ -31,6 +31,12 @@ describe('script parser and serializer', () => {
     expect(codes(loose)).toContain('W04')
     expect(serializeScript(parseScript(serializeScript(ast)))).toBe(serializeScript(ast))
   })
+  it('does not ask for scene KEYFRAME/CAMERA when every shot has its own', () => {
+    const shotsOnly = film.replace('  KEYFRAME: @ada holds @box.\n  CAMERA: medium shot\n', '')
+    expect(shotsOnly).not.toBe(film)
+    expect(codes(shotsOnly)).not.toContain('W04')
+    expect(codes(shotsOnly.replace('    CAMERA: static\n', ''))).toContain('W04')
+  })
   it('reports unsupported syntax instead of silently dropping content', () => {
     expect(codes(film + '\n  SURPRISE COMMAND without a colon')).toContain('E11')
   })
