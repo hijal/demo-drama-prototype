@@ -12,6 +12,9 @@ export async function verifySecret(provided: string, expected: string) {
 export async function authorized(request: Request, env: Env) {
   if (new URL(request.url).pathname.startsWith('/api/gpu/'))
     return verifySecret(request.headers.get('X-GPU-Key') || '', env.GPU_KEY)
+  // Owner decision (2026-10-25): no studio login for now; owner auth will be
+  // added later. Set AUTH_MODE back to "access" to require Cloudflare Access.
+  if (String(env.AUTH_MODE) === 'none') return true
   if (String(env.AUTH_MODE) === 'local')
     return ['localhost', '127.0.0.1', 'studio.test', '[::1]'].includes(
       new URL(request.url).hostname,

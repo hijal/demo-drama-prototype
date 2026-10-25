@@ -39,7 +39,7 @@
     },
   ],
   "vars": {
-    "AUTH_MODE": "access",
+    "AUTH_MODE": "none",
   },
   "secrets": {
     "required": ["GPU_KEY", "ACCESS_TEAM", "ACCESS_AUD", "OWNER_EMAIL"],
