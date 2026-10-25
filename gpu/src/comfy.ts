@@ -41,7 +41,9 @@ export async function comfy(
   });
   if (!r.ok)
     throw new Error(`ComfyUI ${path.split("?")[0]} failed (${r.status})`);
-  return r.json() as Promise<any>;
+  // POST /free, /interrupt and /queue answer 200 with an empty body.
+  const text = await r.text();
+  return (text ? JSON.parse(text) : {}) as any;
 }
 export async function waitIdle(signal: AbortSignal) {
   for (let i = 0; i < 720; i++) {
