@@ -51,12 +51,12 @@ export async function enqueue(
   type: string,
   payload: unknown,
   priority = 0,
+  jobId: string = id(),
 ) {
-  const jobId = id(),
-    time = now();
+  const time = now();
   await query(
     env,
-    "INSERT INTO jobs (id,project_id,type,payload_json,priority,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+    "INSERT INTO jobs (id,project_id,type,payload_json,priority,created_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
     jobId,
     projectId,
     type,

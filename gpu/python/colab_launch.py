@@ -33,6 +33,8 @@ ASPECT_RATIO = "9:16" #@param ["9:16", "16:9"]
 # Overrides the script aspect for new scene renders and final exports.
 RENDER_QUALITY = "1080p" #@param ["1080p", "720p"]
 # Default: 9:16 + 1080p = 1080x1920 Full HD for Reels. 720p is available for testing.
+REFERENCE_DETAIL = "essential" #@param ["essential", "full"]
+# Essential keeps front images, prop variants and character voices; full also creates all extra views.
 QA_MIN_SCORE = 75 #@param {type:"slider", min:50, max:95, step:5}
 # QA approves a reference or scene at this score (%); below it, it retries up to 3 times and keeps the best.
 TIMEZONE = "Asia/Dhaka" #@param {type:"string"}
@@ -62,6 +64,7 @@ os.environ["IDLE_MINUTES"] = str(IDLE_MINUTES)
 os.environ["CONTINUITY_STRATEGY"] = CONTINUITY_STRATEGY
 os.environ["RENDER_ASPECT_RATIO"] = ASPECT_RATIO
 os.environ["RENDER_SHORT_SIDE"] = RENDER_QUALITY.rstrip("p")
+os.environ["REFERENCE_DETAIL"] = REFERENCE_DETAIL
 os.environ["QA_MIN_SCORE"] = str(QA_MIN_SCORE)
 # Validate the remote GPU key/bypass before installing the second model environment.
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -85,6 +88,7 @@ short_side = int(RENDER_QUALITY.rstrip("p"))
 long_side = short_side * 16 // 9
 output_size = f"{short_side}x{long_side}" if ASPECT_RATIO == "9:16" else f"{long_side}x{short_side}"
 done(f"Output: {ASPECT_RATIO} · {output_size} · {RENDER_QUALITY}")
+done(f"Reference detail: {REFERENCE_DETAIL}")
 if VOICE_MIN_SIMILARITY.strip():
     float(VOICE_MIN_SIMILARITY)
     os.environ["VOICE_MIN_SIMILARITY"] = VOICE_MIN_SIMILARITY

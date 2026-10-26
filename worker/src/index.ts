@@ -143,7 +143,7 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       );
     await expireLeases(env);
     await cleanupUploads(env);
-    await healQueues(env);
+    await maintainQueues(env);
     const job = await query(
       env,
       "UPDATE jobs SET status='claimed',error=NULL,claimed_by=?,claimed_at=?,claim_token=?,lease_until=?,attempt=attempt+1,updated_at=? WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY priority DESC,created_at,id LIMIT 1) AND status='queued' RETURNING *",
@@ -171,14 +171,21 @@ async function gpu(request: Request, env: Env, parts: string[]) {
     token = String(
       data.claim_token || request.headers.get("X-Claim-Token") || "",
     );
-  if (parts[2] === "done") {
+  if (parts[2] === "done" || parts[2] === "progress") {
     const existing = await one(
       env,
       "SELECT status,claim_token FROM jobs WHERE id=?",
       jobId,
     );
-    if (existing?.status === "done" && existing.claim_token === token)
-      return ok({ ok: true, idempotent: true });
+    if (
+      existing?.status === "done" &&
+      token &&
+      existing.claim_token === token
+    ) {
+      if (parts[2] === "done") await applySavedCompletion(env, jobId);
+      // A late progress heartbeat is an acknowledgement, never a lease renewal.
+      return ok({ ok: true, idempotent: true, status: "done" });
+    }
   }
   const job = await activeJob(env, jobId, token),
     payload = JSON.parse(job.payload_json);
@@ -541,33 +548,81 @@ async function gpu(request: Request, env: Env, parts: string[]) {
   statements.push(
     query(
       env,
-      "UPDATE jobs SET status='done',pct=100,stage='Complete',updated_at=? WHERE id=? AND claim_token=? AND status='finishing'",
+      "UPDATE jobs SET status='done',pct=100,stage='Applying result',updated_at=? WHERE id=? AND claim_token=? AND status='finishing'",
       now(),
       jobId,
       token,
     ),
   );
   const completed = await env.DB.batch(statements);
-  assert(
-    completed[0].meta.changes === 1,
-    409,
-    "Claim expired before completion",
-  );
-  // The result is saved. What follows (approvals, queueing the next step, log
-  // lines) must not turn a saved result into a failed request: an error here is
-  // logged, and the queue healer picks the project up again.
+  if (completed[0].meta.changes !== 1) {
+    const saved = await one(
+      env,
+      "SELECT status,claim_token FROM jobs WHERE id=?",
+      jobId,
+    );
+    assert(
+      saved?.status === "done" && saved.claim_token === token,
+      409,
+      "Claim expired before completion",
+    );
+  }
+  await applySavedCompletion(env, jobId);
+  return ok({ ok: true });
+}
+
+/** Persist the follow-up before returning so disconnects cannot lose selection.
+ * A short database lease serializes the request, retry and cron recovery paths. */
+async function applySavedCompletion(env: Env, jobId: string) {
+  const job = await query(
+    env,
+    "UPDATE jobs SET stage='Completing result',lease_until=? WHERE id=? AND status='done' AND (stage='Applying result' OR (stage='Completing result' AND COALESCE(lease_until,0)<?)) RETURNING *",
+    now() + 120000,
+    jobId,
+    now(),
+  ).first();
+  if (!job) return;
   try {
-    await afterCompletion(env, job, jobId, payload, result);
+    await afterCompletion(
+      env,
+      job,
+      jobId,
+      JSON.parse(String(job.payload_json)),
+      JSON.parse(String(job.result_json)),
+    );
+    await query(
+      env,
+      "UPDATE jobs SET stage='Complete',updated_at=? WHERE id=? AND status='done' AND stage='Completing result' AND lease_until=?",
+      now(),
+      jobId,
+      Number(job.lease_until),
+    ).run();
+    if (job.type === "qa") await scheduleNext(env, String(job.project_id));
   } catch (error) {
+    await query(
+      env,
+      "UPDATE jobs SET stage='Applying result' WHERE id=? AND status='done' AND stage='Completing result' AND lease_until=?",
+      jobId,
+      Number(job.lease_until),
+    ).run();
     console.error("Follow-up after job completion failed", error);
     await projectLog(
       env,
-      job.project_id,
-      `! The next step after ${describeJob(job.type, payload)} failed (${error instanceof Error ? error.message : "unknown error"}); the studio retries it automatically within a few minutes`,
+      String(job.project_id),
+      `! Applying a saved ${job.type} result failed; the studio will retry without running the GPU job again`,
       jobId,
     );
   }
-  return ok({ ok: true });
+}
+
+async function maintainQueues(env: Env) {
+  const pending = await all(
+    env,
+    "SELECT id FROM jobs WHERE status='done' AND (stage='Applying result' OR (stage='Completing result' AND COALESCE(lease_until,0)<?)) ORDER BY created_at LIMIT 20",
+    now(),
+  );
+  for (const job of pending) await applySavedCompletion(env, job.id);
+  await healQueues(env);
 }
 async function afterCompletion(
   env: Env,
@@ -591,7 +646,8 @@ async function afterCompletion(
       `✓ ${name} ready${qa ? ` · QA ${qa.score}%${qa.score < qa.threshold ? ` (below ${qa.threshold}% after the retries; best image kept)` : ""}` : ""}`,
     );
   } else if (job.type === "clip") await log(`✓ ${name} done · QA next`);
-  else if (job.type === "assemble") await log(`✓ ${name} ready to watch in Final`);
+  else if (job.type === "assemble")
+    await log(`✓ ${name} ready to watch in Final`);
   if (job.type === "fix_script" && payload.remaining?.length)
     await queueRepair(
       env,
@@ -600,12 +656,26 @@ async function afterCompletion(
       `fixed:${jobId}`,
       payload.remaining,
       !!payload.autoApprove,
+      `repair:${jobId}`,
     );
-  if (job.type === "fix_script" && !payload.remaining?.length && payload.autoApprove)
+  if (
+    job.type === "fix_script" &&
+    !payload.remaining?.length &&
+    payload.autoApprove
+  )
     if (await autoApproveScript(env, job.project_id, `fixed:${jobId}`))
       await log("✓ Script approved automatically; references are queued");
-    else await log("! Script still has errors; it waits for you in the Script tab");
+    else
+      await log(
+        "! Script still has errors; it waits for you in the Script tab",
+      );
   if (job.type === "asset" && payload.autoApprove) {
+    const asset = await one(
+      env,
+      "SELECT approved_version FROM assets WHERE id=?",
+      payload.assetId,
+    );
+    if (Number(asset?.approved_version || 0) > Number(payload.version)) return;
     try {
       await approveAssetVersion(
         env,
@@ -615,7 +685,9 @@ async function afterCompletion(
       );
       await log(`✓ ${name} approved automatically`);
       if (await resumeRendering(env, job.project_id))
-        await log("▶ All references for the next episode are approved; rendering starts");
+        await log(
+          "▶ All references for the next episode are approved; rendering starts",
+        );
     } catch (error) {
       if (!(error instanceof HttpError && error.status === 409)) throw error;
     }
@@ -625,6 +697,41 @@ async function afterCompletion(
     // selected; below it, a new take with QA's prompt changes, up to three
     // times; then the best-scoring take is selected and rendering moves on.
     const retake = payload.retake || 0;
+    const selected = await one(
+      env,
+      "SELECT s.approved_clip_id,c.take FROM scenes s LEFT JOIN clips c ON c.id=s.approved_clip_id WHERE s.id=?",
+      payload.sceneId,
+    );
+    const incoming = await one(
+      env,
+      "SELECT c.take,c.status,c.script_version_id,s.content_hash,p.approved_script_id,c.params_json FROM clips c JOIN scenes s ON s.id=c.scene_id JOIN episodes e ON e.id=s.episode_id JOIN projects p ON p.id=e.project_id WHERE c.id=?",
+      payload.clipId,
+    );
+    if (
+      !incoming ||
+      !["ready", "review"].includes(incoming.status) ||
+      (incoming.script_version_id !== incoming.approved_script_id &&
+        JSON.parse(incoming.params_json || "{}").sceneHash !==
+          incoming.content_hash)
+    )
+      return;
+    if (
+      selected?.approved_clip_id &&
+      selected.approved_clip_id !== payload.clipId &&
+      Number(selected.take) >= Number(incoming?.take)
+    )
+      return;
+    if (result.needsOwnerReview) {
+      await query(
+        env,
+        "UPDATE projects SET auto_episode=NULL WHERE id=?",
+        job.project_id,
+      ).run();
+      await log(
+        `! ${name}: speech recognition was unreliable after rechecking; review this saved take before continuing`,
+      );
+      return;
+    }
     try {
       const score =
         typeof result.score === "number" ? `QA ${result.score}%` : "QA";
@@ -632,6 +739,9 @@ async function afterCompletion(
         await approveClip(env, job.project_id, payload.clipId);
         await log(`✓ ${name.replace(/ QA$/, "")} · ${score} · selected`);
       } else if (retake < MAX_AUTO_RETAKES) {
+        const project = await getProject(env, job.project_id);
+        if (payload.autoRender !== false && project.auto_episode === null)
+          return;
         await log(
           `↻ ${name.replace(/ QA$/, "")} · ${score}, below ${result.threshold ?? 75}% · retake ${retake + 1} of ${MAX_AUTO_RETAKES}${result.fix_hint ? ` with changes: ${String(result.fix_hint).slice(0, 240)}` : ""}`,
         );
@@ -642,6 +752,7 @@ async function afterCompletion(
           payload.note || "",
           String(result.fix_hint || ""),
           retake + 1,
+          `retake:${jobId}`,
         );
         return;
       } else {
@@ -666,7 +777,6 @@ async function afterCompletion(
     } catch (error) {
       if (!(error instanceof HttpError && error.status === 409)) throw error;
     }
-    await scheduleNext(env, job.project_id);
   }
 }
 async function queueAsset(
@@ -723,7 +833,13 @@ async function queueRepair(
   rawVersion: string,
   episodes: Array<number | null>,
   autoApprove = false,
+  followupId?: string,
 ) {
+  if (
+    followupId &&
+    (await one(env, "SELECT id FROM jobs WHERE id=?", followupId))
+  )
+    return followupId;
   const [episode, ...remaining] = episodes;
   let input = body;
   if (episode !== null) {
@@ -733,13 +849,20 @@ async function queueRepair(
       episodes: ast.episodes.filter((ep) => ep.number === episode),
     });
   }
-  return enqueue(env, projectId, "fix_script", {
-    body: input,
-    rawVersion,
-    episode,
-    remaining,
-    autoApprove,
-  });
+  return enqueue(
+    env,
+    projectId,
+    "fix_script",
+    {
+      body: input,
+      rawVersion,
+      episode,
+      remaining,
+      autoApprove,
+    },
+    0,
+    followupId,
+  );
 }
 /** Queue a reference for every asset with no version for the approved script. */
 async function queueMissingAssets(
@@ -761,7 +884,11 @@ async function queueMissingAssets(
  * Owner request: no approval clicks. A script version with no validation
  * errors is approved as soon as it is the newest one, and its references start.
  */
-async function autoApproveScript(env: Env, projectId: string, versionId: string) {
+async function autoApproveScript(
+  env: Env,
+  projectId: string,
+  versionId: string,
+) {
   const latest = await one(
     env,
     "SELECT id FROM script_versions WHERE project_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
@@ -769,6 +896,11 @@ async function autoApproveScript(env: Env, projectId: string, versionId: string)
   );
   if (latest?.id !== versionId) return false;
   const project = await getProject(env, projectId);
+  if (project.approved_script_id === versionId) {
+    await queueMissingAssets(env, projectId, true);
+    await resumeRendering(env, projectId);
+    return true;
+  }
   try {
     await approveScript(env, projectId, versionId, project.revision);
   } catch (error) {
@@ -784,7 +916,8 @@ function episodesNeedingRepair(ast: Script, issues: Issue[]) {
   const needed = new Set<number>();
   for (const issue of issues) {
     let index = -1;
-    for (let i = 0; i < starts.length; i++) if (issue.line >= starts[i]) index = i;
+    for (let i = 0; i < starts.length; i++)
+      if (issue.line >= starts[i]) index = i;
     needed.add(ast.episodes[Math.max(index, 0)].number);
   }
   return ast.episodes.map((ep) => ep.number).filter((n) => needed.has(n));
@@ -906,7 +1039,11 @@ async function owner(request: Request, env: Env, parts: string[]) {
     let jobId: string | undefined;
     if (data.fix) {
       if (ast.episodes.length > 1 && data.episode !== undefined) {
-        assert(Number.isInteger(data.episode), 400, "Choose one episode for LLM repair");
+        assert(
+          Number.isInteger(data.episode),
+          400,
+          "Choose one episode for LLM repair",
+        );
         assert(
           ast.episodes.some((ep) => ep.number === data.episode),
           400,
@@ -1181,6 +1318,6 @@ export default {
   async scheduled(_event: ScheduledController, env: Env) {
     await expireLeases(env);
     await cleanupUploads(env);
-    await healQueues(env);
+    await maintainQueues(env);
   },
 } satisfies ExportedHandler<Env>;

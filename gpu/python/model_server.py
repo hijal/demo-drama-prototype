@@ -152,7 +152,10 @@ class Runtime:
                 self.model = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3", dtype=torch.float16, device="cuda")
                 self.loaded = "whisper"
             audio = load_audio(local_file(request["file"]))
-            result = self.model({"raw": audio, "sampling_rate": 16000}, return_timestamps="word", chunk_length_s=30)
+            decoding = {"condition_on_prev_tokens": False}
+            if request.get("retry"):
+                decoding.update({"temperature": (0.0, 0.2, 0.4), "compression_ratio_threshold": 1.35, "logprob_threshold": -1.0, "no_speech_threshold": 0.6})
+            result = self.model({"raw": audio, "sampling_rate": 16000}, return_timestamps="word", chunk_length_s=30, generate_kwargs=decoding)
             words = [
                 {"word": chunk["text"].strip(), "start": chunk["timestamp"][0], "end": chunk["timestamp"][1]}
                 for chunk in result.get("chunks", [])

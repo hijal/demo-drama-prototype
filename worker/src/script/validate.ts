@@ -43,6 +43,10 @@ export function validateScript(script: Script): Issue[] {
       if (scene.shots.length && Math.abs(scene.shots.reduce((sum, sh) => sum + sh.duration, 0) - scene.duration) > 0.5) add('E07', scene.line, 'SHOT durations must add up to SCENE duration (within 0.5 s).', 'Shot-গুলোর মোট সময় scene-এর সময়ের সমান হতে হবে (0.5s ছাড়)।')
       if (!script.locations.some(l => refs(scene.fields.AT ?? '').includes(l.id))) add('W06', scene.fieldLines.AT ?? scene.line, 'AT needs a defined location.', 'AT-এর location define করা নেই।')
       const cast = refs(scene.fields.CAST ?? '')
+      if (/\bcartoon\b/i.test(script.header['NEGATIVE PROMPT'] || '') &&
+          [scene, ...scene.shots].some(s => /\bcartoon\b/i.test(s.fields.VISUAL || ''))) {
+        add('W07', scene.line, 'This scene requests a cartoon effect but NEGATIVE PROMPT forbids cartoon; clarify the intended effect before rendering.', 'এই scene-এ cartoon effect চাওয়া হয়েছে, কিন্তু NEGATIVE PROMPT-এ cartoon নিষেধ; render-এর আগে দ্বন্দ্বটি ঠিক করো।')
+      }
       const allSpeakers = new Set([scene, ...scene.shots].flatMap(s => s.dialogue.map(d => d.speaker)))
       if (allSpeakers.size > 3) add('W02', scene.line, 'More than three speaking characters need separate voice-reference planning.', 'তিনজনের বেশি speaker; voice reference আলাদা করে পরিকল্পনা করো।')
       const visualAssets = new Set(refs([scene, ...scene.shots].flatMap(s => Object.values(s.fields)).join(' ')).filter(id => resolveRef(id)?.characterType !== 'voice_only'))

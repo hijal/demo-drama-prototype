@@ -33,6 +33,18 @@ Run all with an appropriate GPU. The notebook checks the GPU key/bypass through 
 
 The last cell defaults to **ASPECT_RATIO = 9:16** and **RENDER_QUALITY = 1080p** for Reels (1080×1920). Choose 16:9 for landscape (1920×1080), or 720p for test renders (720×1280 portrait / 1280×720 landscape). The Colab aspect overrides the script for new scenes and final assembly. Existing approved takes are not regenerated automatically: regenerate landscape scenes before making a portrait final, otherwise assembly fits them inside the portrait frame with padding. Latent continuity falls back to reference-video when the preceding take's orientation or resolution differs.
 
+**REFERENCE_DETAIL** defaults to **essential**: generate and check the front reference, keep prop variants and character voice samples, and use the front image as the reference sheet. Select **full** to retain the original face/detail, left, right and back views and combined sheet. Existing approved reference versions are reused in either mode.
+
+### Completion recovery and QA
+
+GPU results are saved before their follow-up actions, with persistent `Applying result` / `Completing result` stages. A short lease serializes completion recovery; interrupted follow-ups resume on the next claim or cron without rerunning inference. Late heartbeats acknowledge their own completed claim without extending its lease. Duplicate delivery and concurrent queue requests reuse an existing job, while cancelled work can be queued again after an explicit Resume. Recovery respects changed scripts/references, newer owner-selected takes and Stop.
+
+Older completed passing QA results with a lost selection are recovered before creating another take. QA frames now include the relevant shot and its cast, camera and keyframe; close-ups and voice-only narration do not require every scene participant in every frame. A declared dialogue scene must also have word error at or below 25% to pass. The existing best-take fallback after three retakes remains available even when no take passes.
+
+Implausibly dense/repeated ASR output and invalid timestamps trigger one audio-only recheck. If recognition remains unreliable, the video is kept for owner review and automatic rendering pauses, rather than spending GPU time on a new video because ASR failed. Review the saved take in Scenes before selecting it. The script validator also warns when a scene requests a cartoon effect while the negative prompt forbids cartoon (`W07`); it does not delete either instruction.
+
+Deploy the updated Worker before starting the updated Colab notebook. Local regression tests cannot establish real GPU speed or render quality; compare the same script on Colab after rollout.
+
 Qwen3.6-27B and Qwen3.5-9B are candidates, not measured winners. The local server switches between candidates on demand, one model at a time. `npm --prefix worker run compare -- /content/private-script.txt --models Qwen/Qwen3.6-27B,Qwen/Qwen3.5-9B --episode 1 --out /content/private-review` runs the same episode sequentially. Keep private results outside the checkout. Actual quality, memory, latency and owner approval remain required.
 
 ## Workflow

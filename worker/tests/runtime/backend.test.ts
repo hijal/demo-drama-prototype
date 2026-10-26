@@ -580,7 +580,10 @@ test("idle heartbeat cannot indefinitely renew a claim whose response the GPU lo
   await request(`/api/projects/${p.id}/jobs/${job.id}/cancel`, {});
 });
 test("hands-off flow: upload auto-repairs and approves, references and scenes approve themselves by QA score", async () => {
-  const series = await readFile("../docs/templates/series_template.txt", "utf8");
+  const series = await readFile(
+    "../docs/templates/series_template.txt",
+    "utf8",
+  );
   // Both episodes miss CAMERA, so both need the LLM.
   const broken = series.replace(/^ {2}CAMERA: .*\n/gm, "");
   const [shared, episode2] = series.split(/(?=== EPISODE 02)/);
@@ -667,7 +670,13 @@ test("hands-off flow: upload auto-repairs and approves, references and scenes ap
           ]),
         ),
       },
-      qa: { score: 81, threshold: 75, issues: [], observed: "", prompt_changes: "" },
+      qa: {
+        score: 81,
+        threshold: 75,
+        issues: [],
+        observed: "",
+        prompt_changes: "",
+      },
     });
   }
   // References approved themselves; rendering of episode 1 started on its own.
@@ -680,7 +689,9 @@ test("hands-off flow: upload auto-repairs and approves, references and scenes ap
   const lost = await claim("dead-runtime");
   expect(lost.type).toBe("clip");
   // Its last heartbeat and claim are older than a minute.
-  await (await mf.getD1Database("DB"))
+  await (
+    await mf.getD1Database("DB")
+  )
     .prepare("UPDATE jobs SET claimed_at=claimed_at-120000 WHERE id=?")
     .bind(lost.id)
     .run();
@@ -746,13 +757,434 @@ test("hands-off flow: upload auto-repairs and approves, references and scenes ap
     .bind(p.id)
     .run();
   const healed = await claim();
-  expect(healed.type).toBe("clip");
-  expect(healed.payload.sceneId).toBe(ep2.id);
-  expect(healed.error ?? null).toBeNull();
+  expect(healed).toBeNull();
+  expect(
+    (await detailOf()).scenes.find((s: any) => s.id === ep2.id)
+      .approved_clip_id,
+  ).toBe(ep2.approved_clip_id);
   const lines = (await (
     await request(`/api/projects/${p.id}/logs`)
   ).json()) as any[];
-  expect(lines.some((l) => l.line.includes("automatic queue had stopped"))).toBe(
-    true,
+  expect(
+    lines.some((l) => l.line.includes("automatic queue had stopped")),
+  ).toBe(true);
+});
+
+// Synthetic saved results reproduce the live failure without a GPU or private scripts.
+async function savedQa(
+  options: {
+    pass?: boolean;
+    stage?: string;
+    retake?: number;
+    review?: boolean;
+  } = {},
+) {
+  const db = await mf.getD1Database("DB");
+  // Each test owns the synthetic queue; do not claim work left by earlier fixtures.
+  await db
+    .prepare(
+      "UPDATE jobs SET status='cancelled',claim_token=NULL WHERE status IN ('queued','claimed','running','finishing')",
+    )
+    .run();
+  await db.prepare("UPDATE projects SET auto_episode=NULL").run();
+  const p = await project();
+  const uploaded = (await (
+    await request(`/api/projects/${p.id}/scripts`, { body: film })
+  ).json()) as any;
+  await request(`/api/projects/${p.id}/approve-script`, {
+    versionId: uploaded.versionId,
+    revision: 0,
+  });
+  const detail = (await (await request(`/api/projects/${p.id}`)).json()) as any;
+  const scene = detail.scenes[0];
+  for (const a of detail.assets) {
+    await db
+      .prepare(
+        "UPDATE assets SET approved_version=1,status='approved' WHERE id=?",
+      )
+      .bind(a.id)
+      .run();
+    await db
+      .prepare("INSERT INTO asset_versions VALUES (?,?,?,?,?,?,?)")
+      .bind(
+        crypto.randomUUID(),
+        a.id,
+        1,
+        JSON.stringify({
+          front: "front.png",
+          sheet: "sheet.png",
+          voice: "voice.wav",
+          variant_0: "variant.png",
+        }),
+        "",
+        uploaded.versionId,
+        Date.now(),
+      )
+      .run();
+  }
+  await db
+    .prepare("UPDATE projects SET auto_episode=0 WHERE id=?")
+    .bind(p.id)
+    .run();
+  const clipId = crypto.randomUUID(),
+    jobId = crypto.randomUUID(),
+    token = crypto.randomUUID();
+  const result = {
+    pass: options.pass ?? true,
+    score: options.pass === false ? 60 : 85,
+    threshold: 75,
+    issues: [],
+    words: [],
+    fix_hint: "Keep the face visible",
+    needsOwnerReview: options.review ?? false,
+  };
+  await db
+    .prepare(
+      "INSERT INTO clips (id,scene_id,take,r2_key,status,qa_json,asset_versions_json,script_version_id,created_at) VALUES (?,?,1,?,?,?,?,?,?)",
+    )
+    .bind(
+      clipId,
+      scene.id,
+      "projects/synthetic/clip.mp4",
+      result.pass ? "ready" : "review",
+      JSON.stringify(result),
+      "{}",
+      uploaded.versionId,
+      Date.now(),
+    )
+    .run();
+  const payload = {
+    clipId,
+    sceneId: scene.id,
+    scene: JSON.parse(scene.spec_json),
+    scriptVersion: uploaded.versionId,
+    retake: options.retake ?? 0,
+  };
+  await db
+    .prepare(
+      "INSERT INTO jobs (id,project_id,type,payload_json,status,claim_token,lease_until,result_json,stage,created_at,updated_at) VALUES (?,?,'qa',?,'done',?,?,?,?,?,?)",
+    )
+    .bind(
+      jobId,
+      p.id,
+      JSON.stringify(payload),
+      token,
+      Date.now() + 600000,
+      JSON.stringify(result),
+      options.stage ?? "Applying result",
+      Date.now(),
+      Date.now(),
+    )
+    .run();
+  return { db, p, scene, clipId, jobId, token, result };
+}
+const detailFor = async (projectId: string) =>
+  (await (await request(`/api/projects/${projectId}`)).json()) as any;
+const askForWork = async () =>
+  request("/api/gpu/claim", { workerId: "regression-worker" }, "POST", gpu);
+
+test("a late heartbeat recognizes its own completed claim without extending a lease", async () => {
+  const s = await savedQa();
+  const before = (await s.db
+    .prepare("SELECT lease_until FROM jobs WHERE id=?")
+    .bind(s.jobId)
+    .first()) as any;
+  expect(
+    (
+      await request(
+        `/api/gpu/jobs/${s.jobId}/progress`,
+        { claim_token: s.token },
+        "POST",
+        gpu,
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await request(
+        `/api/gpu/jobs/${s.jobId}/progress`,
+        { claim_token: "wrong" },
+        "POST",
+        gpu,
+      )
+    ).status,
+  ).toBe(409);
+  const after = (await s.db
+    .prepare("SELECT lease_until FROM jobs WHERE id=?")
+    .bind(s.jobId)
+    .first()) as any;
+  expect(after.lease_until).toBe(before.lease_until);
+  await s.db
+    .prepare("UPDATE jobs SET status='cancelled' WHERE id=?")
+    .bind(s.jobId)
+    .run();
+  expect(
+    (
+      await request(
+        `/api/gpu/jobs/${s.jobId}/progress`,
+        { claim_token: s.token },
+        "POST",
+        gpu,
+      )
+    ).status,
+  ).toBe(409);
+});
+
+test("restart recovers a saved passing QA instead of rendering the same scene again", async () => {
+  const s = await savedQa();
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.scenes[0].approved_clip_id).toBe(s.clipId);
+  expect(d.clips).toHaveLength(1);
+  expect(d.jobs.find((j: any) => j.id === s.jobId).stage).toBe("Complete");
+});
+
+test("legacy completed QA can be selected after a lost approval without regenerating", async () => {
+  const s = await savedQa({ stage: "Complete" });
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.scenes[0].approved_clip_id).toBe(s.clipId);
+  expect(d.clips).toHaveLength(1);
+});
+
+test("concurrent recovery and duplicate completion create one hinted QA retake", async () => {
+  const s = await savedQa({ pass: false });
+  const responses = await Promise.all([
+    askForWork(),
+    askForWork(),
+    request(
+      `/api/gpu/jobs/${s.jobId}/done`,
+      { claim_token: s.token, result: s.result },
+      "POST",
+      gpu,
+    ),
+  ]);
+  expect(responses.map((r) => r.status)).toEqual([200, 200, 200]);
+  const d = await detailFor(s.p.id);
+  expect(d.clips).toHaveLength(2);
+  const retry = (await s.db
+    .prepare("SELECT payload_json FROM jobs WHERE project_id=? AND type='clip'")
+    .bind(s.p.id)
+    .first()) as any;
+  expect(JSON.parse(retry.payload_json).retake).toBe(1);
+  expect(JSON.parse(retry.payload_json).hint).toBe("Keep the face visible");
+});
+
+test("an unexpired completion lock blocks rerenders; an expired lock recovers", async () => {
+  const s = await savedQa({ stage: "Completing result" });
+  await askForWork();
+  expect((await detailFor(s.p.id)).clips).toHaveLength(1);
+  expect((await detailFor(s.p.id)).scenes[0].approved_clip_id).toBeNull();
+  await s.db
+    .prepare("UPDATE jobs SET lease_until=? WHERE id=?")
+    .bind(Date.now() - 1, s.jobId)
+    .run();
+  await askForWork();
+  expect((await detailFor(s.p.id)).scenes[0].approved_clip_id).toBe(s.clipId);
+});
+
+test("a stale take is never resurrected by completion recovery", async () => {
+  const s = await savedQa();
+  await s.db
+    .prepare("UPDATE clips SET status='stale' WHERE id=?")
+    .bind(s.clipId)
+    .run();
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.scenes[0].approved_clip_id).not.toBe(s.clipId);
+  expect(d.clips.find((c: any) => c.id === s.clipId).status).toBe("stale");
+});
+
+test("unreliable ASR waits for review and never starts an expensive automatic rerender", async () => {
+  const s = await savedQa({ pass: false, review: true });
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.project.auto_episode).toBeNull();
+  expect(d.clips).toHaveLength(1);
+  expect(d.scenes[0].approved_clip_id).toBeNull();
+});
+
+test("concurrent render requests cannot enqueue duplicate takes for one scene", async () => {
+  const s = await savedQa({ stage: "Complete" });
+  await s.db
+    .prepare("UPDATE clips SET status='stale' WHERE id=?")
+    .bind(s.clipId)
+    .run();
+  const path = `/api/projects/${s.p.id}/scenes/${s.scene.id}/render`;
+  const responses = await Promise.all([request(path, {}), request(path, {})]);
+  expect(responses.map((r) => r.status)).toEqual([200, 200]);
+  const bodies = (await Promise.all(responses.map((r) => r.json()))) as any[];
+  expect(bodies[0].clipId).toBe(bodies[1].clipId);
+  expect((await detailFor(s.p.id)).clips).toHaveLength(2);
+});
+
+test("replayed review result cannot select a newer take chosen by the owner", async () => {
+  const s = await savedQa();
+  const newer = crypto.randomUUID();
+  await s.db
+    .prepare(
+      "INSERT INTO clips (id,scene_id,take,r2_key,status,asset_versions_json,script_version_id,created_at) VALUES (?,?,2,?,'ready','{}',?,?)",
+    )
+    .bind(
+      newer,
+      s.scene.id,
+      "projects/synthetic/new.mp4",
+      s.scene.script_version_id,
+      Date.now(),
+    )
+    .run();
+  await s.db
+    .prepare("UPDATE scenes SET approved_clip_id=? WHERE id=?")
+    .bind(newer, s.scene.id)
+    .run();
+  await askForWork();
+  expect((await detailFor(s.p.id)).scenes[0].approved_clip_id).toBe(newer);
+});
+
+test("stop during pending failed QA does not restart rendering", async () => {
+  const s = await savedQa({ pass: false });
+  await request(`/api/projects/${s.p.id}/stop`, {});
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.project.auto_episode).toBeNull();
+  expect(d.clips).toHaveLength(1);
+});
+
+test("two simultaneous completion deliveries acknowledge one result and select one take", async () => {
+  const s = await savedQa();
+  await s.db
+    .prepare(
+      "UPDATE jobs SET status='running',stage='Checking frames' WHERE id=?",
+    )
+    .bind(s.jobId)
+    .run();
+  const responses = await Promise.all(
+    [0, 1].map(() =>
+      request(
+        `/api/gpu/jobs/${s.jobId}/done`,
+        { claim_token: s.token, result: s.result },
+        "POST",
+        gpu,
+      ),
+    ),
   );
+  expect(responses.map((r) => r.status)).toEqual([200, 200]);
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.scenes[0].approved_clip_id).toBe(s.clipId);
+  expect(d.clips).toHaveLength(1);
+});
+
+test("changed reference pins reject recovery of an otherwise passing take", async () => {
+  const s = await savedQa();
+  const a = (await s.db
+    .prepare("SELECT id FROM assets WHERE project_id=? LIMIT 1")
+    .bind(s.p.id)
+    .first()) as any;
+  await s.db
+    .prepare("UPDATE clips SET asset_versions_json=? WHERE id=?")
+    .bind(JSON.stringify({ [a.id]: 0 }), s.clipId)
+    .run();
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.scenes[0].approved_clip_id).not.toBe(s.clipId);
+});
+
+test("replaying a script approval does not increment revision or invalidate completed work", async () => {
+  const s = await savedQa();
+  const versionId = `fixed:${s.jobId}`;
+  await s.db
+    .prepare("INSERT INTO script_versions VALUES (?,?,'fixed',?,'{}',?)")
+    .bind(versionId, s.p.id, film, Date.now() + 1)
+    .run();
+  await s.db
+    .prepare(
+      "UPDATE projects SET approved_script_id=?,revision=5,auto_episode=NULL WHERE id=?",
+    )
+    .bind(versionId, s.p.id)
+    .run();
+  await s.db
+    .prepare(
+      "UPDATE jobs SET type='fix_script',payload_json=?,result_json=? WHERE id=?",
+    )
+    .bind(
+      JSON.stringify({ autoApprove: true }),
+      JSON.stringify({ script: film }),
+      s.jobId,
+    )
+    .run();
+  await askForWork();
+  expect((await detailFor(s.p.id)).project.revision).toBe(5);
+});
+
+test("recovery never downgrades an asset version already selected by the owner", async () => {
+  const s = await savedQa();
+  const a = (await s.db
+    .prepare("SELECT * FROM assets WHERE project_id=? LIMIT 1")
+    .bind(s.p.id)
+    .first()) as any;
+  await s.db
+    .prepare("INSERT INTO asset_versions VALUES (?,?,?,?,?,?,?)")
+    .bind(
+      crypto.randomUUID(),
+      a.id,
+      2,
+      "{}",
+      "",
+      s.scene.script_version_id,
+      Date.now(),
+    )
+    .run();
+  await s.db
+    .prepare("UPDATE assets SET approved_version=2 WHERE id=?")
+    .bind(a.id)
+    .run();
+  await s.db
+    .prepare("UPDATE projects SET auto_episode=NULL WHERE id=?")
+    .bind(s.p.id)
+    .run();
+  await s.db
+    .prepare(
+      "UPDATE jobs SET type='asset',payload_json=?,result_json=? WHERE id=?",
+    )
+    .bind(
+      JSON.stringify({ assetId: a.id, version: 1, autoApprove: true }),
+      JSON.stringify({ files: {}, qa: { score: 90 } }),
+      s.jobId,
+    )
+    .run();
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.assets.find((item: any) => item.id === a.id).approved_version).toBe(
+    2,
+  );
+});
+
+test("Resume after cancelling an automatic retake can enqueue fresh work", async () => {
+  const s = await savedQa({ pass: false });
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  const retry = d.jobs.find((j: any) => j.type === "clip");
+  await request(`/api/projects/${s.p.id}/jobs/${retry.id}/cancel`, {});
+  await request(`/api/projects/${s.p.id}/render`, { episode: 0 });
+  const resumed = await detailFor(s.p.id);
+  expect(
+    resumed.jobs.filter(
+      (j: any) =>
+        j.type === "clip" &&
+        ["queued", "claimed", "running"].includes(j.status),
+    ),
+  ).toHaveLength(1);
+});
+
+test("unreliable QA from a stale take cannot pause the current project", async () => {
+  const s = await savedQa({ pass: false, review: true });
+  await s.db
+    .prepare("UPDATE clips SET status='stale' WHERE id=?")
+    .bind(s.clipId)
+    .run();
+  await askForWork();
+  const d = await detailFor(s.p.id);
+  expect(d.project.auto_episode).toBe(0);
+  expect(d.clips).toHaveLength(2);
 });

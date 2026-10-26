@@ -8,6 +8,120 @@ export interface Line {
   text: string
   at: number
 }
+/** Reject impossible ASR output before it can drive retakes or subtitles. */
+export function assessTranscript(words: unknown, duration: number) {
+  if (!Array.isArray(words) || !Number.isFinite(duration) || duration <= 0)
+    return { reliable: false, reason: 'Invalid speech timestamps' }
+  let last = -1
+  const tokens: string[] = []
+  for (const word of words) {
+    if (
+      !word ||
+      typeof word.word !== 'string' ||
+      !Number.isFinite(word.start) ||
+      !Number.isFinite(word.end) ||
+      word.start < 0 ||
+      word.end < word.start ||
+      word.end > duration + 0.25 ||
+      word.start < last - 0.1
+    )
+      return {
+        reliable: false,
+        reason: 'Speech timestamps fall outside the clip or run backwards',
+      }
+    last = word.start
+    tokens.push(...normalize(word.word))
+  }
+  if (tokens.length > Math.max(20, duration * 8))
+    return {
+      reliable: false,
+      reason: 'ASR produced an implausible number of words',
+    }
+  let run = 0,
+    previous = ''
+  for (const token of tokens) {
+    run = token === previous ? run + 1 : 1
+    if (run >= 12)
+      return {
+        reliable: false,
+        reason: 'ASR repeated the same word excessively',
+      }
+    previous = token
+  }
+  return { reliable: true, reason: '' }
+}
+
+export function evaluateQa(
+  visual: number,
+  wer: number,
+  hasDialogue: boolean,
+  reliable: boolean,
+  voicePenalty: number,
+  minimum: number,
+) {
+  const dialogue = Math.round(100 * (1 - Math.min(1, Math.max(0, wer))))
+  const score = Math.max(
+    0,
+    Math.round(
+      (hasDialogue ? visual * 0.8 + dialogue * 0.2 : visual) - voicePenalty,
+    ),
+  )
+  return {
+    score,
+    pass: score >= minimum && reliable && (!hasDialogue || wer <= 0.25),
+    needsOwnerReview: !reliable,
+  }
+}
+
+/** Label samples with the relevant shot; do not require every actor in every close-up. */
+export function framePlan(
+  scene: import('../../worker/src/script/types').Scene,
+  duration: number,
+) {
+  const segments = scene.shots.length ? scene.shots : [scene]
+  if (
+    !Number.isFinite(duration) ||
+    duration <= 0 ||
+    segments.some((s) => !Number.isFinite(s.duration) || s.duration <= 0)
+  )
+    throw new Error('QA needs positive finite scene and shot durations')
+  const total = segments.reduce((sum, s) => sum + s.duration, 0)
+  const budget = Math.max(3, Math.min(8, segments.length * 3))
+  const plan: Array<{
+    at: number
+    shot: number | null
+    cast: string
+    camera: string
+    keyframe: string
+    visual: string
+  }> = []
+  let offset = 0
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]
+    const start = (offset / total) * duration
+    const end = ((offset + segment.duration) / total) * duration
+    const count =
+      Math.floor(budget / segments.length) +
+      (i < budget % segments.length ? 1 : 0)
+    for (let n = 0; n < count; n++)
+      plan.push({
+        at: Math.max(
+          0,
+          Math.min(
+            duration - 0.001,
+            start + ((n + 0.5) / count) * (end - start),
+          ),
+        ),
+        shot: scene.shots.length ? segment.number : null,
+        cast: segment.fields.CAST || scene.fields.CAST || '',
+        camera: segment.fields.CAMERA || scene.fields.CAMERA || '',
+        keyframe: segment.fields.KEYFRAME || scene.fields.KEYFRAME || '',
+        visual: segment.fields.VISUAL || scene.fields.VISUAL || '',
+      })
+    offset += segment.duration
+  }
+  return plan
+}
 export const normalize = (text: string) =>
   text
     .toLowerCase()

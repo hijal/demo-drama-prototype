@@ -83,3 +83,11 @@ describe('validator', () => {
     expect(codes(film.replace('  VARIANT open | 1-1 | lid open', '  VARIANT open | 1-2 | lid open\n  VARIANT torn | 1-1 | torn lid'))).toContain('W05')
   })
 })
+
+it('warns about cartoon action contradicted by the global negative prompt without removing text', () => {
+  const raw=film.replace('LANGUAGE: English','LANGUAGE: English\nNEGATIVE PROMPT: cartoon, text')
+    .replace('VISUAL: @ada picks up @box.','VISUAL: @ada vanishes in a cartoon dust cloud around @box.');
+  const ast=parseScript(raw);
+  expect(validateScript(ast).some(i=>i.code==='W07')).toBe(true);
+  expect(serializeScript(ast)).toContain('cartoon dust cloud');
+});

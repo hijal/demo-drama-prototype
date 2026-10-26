@@ -12,6 +12,7 @@ import {
   enqueue,
   invalidateRendersSQL,
   invalidateDependentClipsSQL,
+  approveClip,
 } from "./db";
 import type { Scene, Script } from "./script/types";
 import { projectLog } from "./activity";
@@ -233,7 +234,31 @@ export async function queueClip(
   note = "",
   hint = "",
   retake = 0,
+  followupId?: string,
 ) {
+  if (followupId) {
+    const existing = await one(
+      env,
+      "SELECT j.id,j.status,c.status clip_status,json_extract(j.payload_json,'$.clipId') clipId FROM jobs j LEFT JOIN clips c ON c.id=json_extract(j.payload_json,'$.clipId') WHERE j.id=? AND j.project_id=?",
+      followupId,
+      projectId,
+    );
+    if (existing) {
+      if (
+        !["cancelled", "failed"].includes(existing.status) &&
+        !["stale", "failed"].includes(existing.clip_status)
+      )
+        return { clipId: existing.clipId, jobId: existing.id };
+      followupId = undefined; // An explicit Resume can replace a cancelled attempt.
+    }
+  }
+  const active = await one(
+    env,
+    "SELECT id,json_extract(payload_json,'$.clipId') clipId FROM jobs WHERE project_id=? AND json_extract(payload_json,'$.sceneId')=? AND type IN ('clip','qa') AND status IN ('queued','claimed','running','finishing') LIMIT 1",
+    projectId,
+    sceneId,
+  );
+  if (active) return { clipId: active.clipId, jobId: active.id };
   const p = await getProject(env, projectId);
   assert(p.approved_script_id, 409, "Approve a script before rendering");
   const s = await one(
@@ -278,7 +303,7 @@ export async function queueClip(
     sceneId,
   ))!.next;
   const clipId = id(),
-    jobId = id(),
+    jobId = followupId || id(),
     time = now();
   const payload = {
     clipId,
@@ -297,14 +322,18 @@ export async function queueClip(
     hint,
     retake,
     take,
+    autoRender: p.auto_episode !== null,
     style: await scriptStyle(env, p.approved_script_id),
     context: previous?.status === "ready" ? previous : null,
   };
-  // UNIQUE(scene_id,take) is the concurrency guard; no duplicate active take is silently accepted.
+  // Reserve the take and its job atomically. A competing scheduler returns the
+  // winner instead of creating another take or leaking a UNIQUE error.
+  const guard =
+    "NOT EXISTS (SELECT 1 FROM jobs WHERE project_id=? AND json_extract(payload_json,'$.sceneId')=? AND type IN ('clip','qa') AND status IN ('queued','claimed','running','finishing')) AND EXISTS (SELECT 1 FROM scenes s JOIN episodes e ON e.id=s.episode_id JOIN projects p ON p.id=e.project_id WHERE s.id=? AND s.script_version_id=? AND p.approved_script_id=?) AND NOT EXISTS (SELECT 1 FROM json_each(?) pin LEFT JOIN assets a ON a.id=pin.key WHERE a.id IS NULL OR a.approved_version IS NOT pin.value) AND (? IS NULL OR EXISTS (SELECT 1 FROM clips c JOIN scenes s ON s.approved_clip_id=c.id WHERE c.id=? AND c.status='ready')) AND NOT EXISTS (SELECT 1 FROM jobs WHERE id=?) AND (?=0 OR EXISTS (SELECT 1 FROM projects WHERE id=? AND auto_episode=?))";
   await env.DB.batch([
     query(
       env,
-      "INSERT INTO clips (id,scene_id,take,asset_versions_json,context_clip_id,script_version_id,owner_note,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      `INSERT OR IGNORE INTO clips (id,scene_id,take,asset_versions_json,context_clip_id,script_version_id,owner_note,created_at) SELECT ?,?,?,?,?,?,?,? WHERE ${guard}`,
       clipId,
       sceneId,
       take,
@@ -313,19 +342,40 @@ export async function queueClip(
       p.approved_script_id,
       note,
       time,
+      projectId,
+      sceneId,
+      sceneId,
+      p.approved_script_id,
+      p.approved_script_id,
+      json(pins),
+      payload.context?.approved_clip_id || null,
+      payload.context?.approved_clip_id || null,
+      jobId,
+      p.auto_episode === null ? 0 : 1,
+      projectId,
+      p.auto_episode,
     ),
     query(
       env,
-      "INSERT INTO jobs (id,project_id,type,payload_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+      "INSERT OR IGNORE INTO jobs (id,project_id,type,payload_json,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM clips WHERE id=?)",
       jobId,
       projectId,
       "clip",
       json(payload),
       time,
       time,
+      clipId,
     ),
   ]);
-  return { clipId, jobId };
+  const winner = await one(
+    env,
+    "SELECT id,json_extract(payload_json,'$.clipId') clipId FROM jobs WHERE project_id=? AND json_extract(payload_json,'$.sceneId')=? AND type='clip' AND (id=? OR status IN ('queued','claimed','running','finishing')) ORDER BY created_at DESC LIMIT 1",
+    projectId,
+    sceneId,
+    jobId,
+  );
+  assert(winner, 409, "Scene changed while queueing; reload before rendering");
+  return { clipId: winner.clipId, jobId: winner.id };
 }
 /** Queue the next scene of the automatic episode; true when something was queued. */
 export async function scheduleNext(
@@ -336,7 +386,7 @@ export async function scheduleNext(
   if (p.auto_episode === null) return false;
   const active = await one(
     env,
-    "SELECT id FROM jobs WHERE project_id=? AND type IN ('clip','qa') AND status IN ('queued','claimed','running') LIMIT 1",
+    "SELECT id FROM jobs WHERE project_id=? AND type IN ('clip','qa') AND (status IN ('queued','claimed','running','finishing') OR (status='done' AND stage IN ('Applying result','Completing result'))) LIMIT 1",
     projectId,
   );
   if (active) return false;
@@ -350,6 +400,63 @@ export async function scheduleNext(
     p.approved_script_id,
   );
   if (next) {
+    // Older deployments could save QA but lose the selection. Reuse a current
+    // completed take before paying to render the same scene again.
+    const completed = await all(
+      env,
+      "SELECT c.*,j.id qa_job,j.payload_json,j.result_json FROM clips c JOIN jobs j ON j.type='qa' AND json_extract(j.payload_json,'$.clipId')=c.id AND j.status='done' AND j.stage='Complete' WHERE c.scene_id=? AND c.status IN ('ready','review') AND c.script_version_id=? ORDER BY c.take DESC",
+      next.id,
+      p.approved_script_id,
+    );
+    for (const take of completed) {
+      const qa = JSON.parse(take.result_json || "{}");
+      if (qa.needsOwnerReview) {
+        await query(
+          env,
+          "UPDATE projects SET auto_episode=NULL WHERE id=?",
+          projectId,
+        ).run();
+        return false;
+      }
+      const payload = JSON.parse(take.payload_json);
+      if (qa.pass || Number(payload.retake || 0) >= 3) {
+        const best = qa.pass
+          ? take
+          : [...completed].sort(
+              (a, b) =>
+                Number(JSON.parse(b.qa_json || "{}").score || 0) -
+                Number(JSON.parse(a.qa_json || "{}").score || 0),
+            )[0];
+        try {
+          await approveClip(env, projectId, best.id);
+          await projectLog(
+            env,
+            projectId,
+            "↻ The automatic queue had stopped; recovered the saved QA take without rendering again",
+            take.qa_job,
+          );
+          return scheduleNext(env, projectId);
+        } catch (error) {
+          if (!(
+            error instanceof Error &&
+            "status" in error &&
+            error.status === 409
+          ))
+            throw error;
+          continue; // Changed references must not resurrect an old take.
+        }
+      }
+      await queueClip(
+        env,
+        projectId,
+        next.id,
+        payload.note || "",
+        qa.fix_hint || "",
+        Number(payload.retake || 0) + 1,
+        `retake:${take.qa_job}`,
+      );
+      return true;
+    }
     await queueClip(env, projectId, next.id);
     return true;
   }
@@ -369,7 +476,7 @@ export async function scheduleNext(
 export async function healQueues(env: Env) {
   const stuck = await all(
     env,
-    "SELECT p.id FROM projects p WHERE p.auto_episode IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.project_id=p.id AND j.type IN ('clip','qa') AND j.status IN ('queued','claimed','running','finishing'))",
+    "SELECT p.id FROM projects p WHERE p.auto_episode IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.project_id=p.id AND j.type IN ('clip','qa') AND (j.status IN ('queued','claimed','running','finishing') OR (j.status='done' AND j.stage IN ('Applying result','Completing result'))))",
   );
   for (const { id: projectId } of stuck)
     try {

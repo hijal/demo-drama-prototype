@@ -118,6 +118,7 @@ For series, replace `== SCENES ==` with `== EPISODE 01 | Episode title ==`, foll
 | E12 | Fixer changed spoken lines, character identity IDs, scene/episode boundaries |
 | W01–W03 | Dialogue may not fit, more than 3 speakers, potentially more than 9 image references |
 | W04–W06 | Missing camera/keyframe, invalid variant ranges, missing location |
+| W07 | Scene requests a cartoon effect while NEGATIVE PROMPT forbids cartoon |
 
 Every issue has a source line and English/Bangla explanations. Warnings need review even when validation passes. Timing is checked locally per shot/scene, including the full SFX length.
 

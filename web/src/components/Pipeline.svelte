@@ -163,6 +163,19 @@
         tab: 'Cast & locations',
       }
     const all = detail.scenes
+    const speechReview = all.some((sc: any) => {
+      if (sc.approved_clip_id) return false
+      const take = detail.clips.filter((c: any) => c.scene_id === sc.id)
+        .sort((a: any, b: any) => b.take - a.take)[0]
+      if (take?.status !== 'review') return false
+      try { return JSON.parse(take.qa_json || '{}').needsOwnerReview === true } catch { return false }
+    })
+    if (speechReview)
+      return {
+        step: 'Needs you',
+        text: 'Speech recognition needs review. The saved video is kept; watch the take in Scenes before choosing it or regenerating.',
+        tab: 'Scenes',
+      }
     const selected = all.filter((sc: any) => sc.approved_clip_id).length
     const below = all.filter((sc: any) => {
       const take = detail.clips.find((c: any) => c.id === sc.approved_clip_id)
@@ -464,7 +477,7 @@
                   >
                     <strong
                       >{typeof qa.score === 'number'
-                        ? `QA ${qa.score}%${qa.pass ? '' : ` · below ${qa.threshold}%`}`
+                        ? `QA ${qa.score}%${qa.pass ? '' : qa.needsOwnerReview ? ' · speech review needed' : qa.score >= qa.threshold ? ' · dialogue check failed' : ` · below ${qa.threshold}%`}`
                         : qa.pass
                           ? 'QA passed'
                           : 'QA flagged issues'}</strong

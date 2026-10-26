@@ -6,6 +6,7 @@ import { execute, local, type Job } from "./handlers";
 import { delay, comfy, waitIdle, takeUploadedInputs } from "./comfy";
 import { systemStats } from "./stats";
 import { log, duration, jobLabel, tail } from "./log";
+import { renewClaim, completeJob } from "./job-lifecycle";
 const root = resolve(process.env.PIPELINE_WORK_DIR || "/content/drama-runtime");
 const studio = (process.env.STUDIO_URL || "").replace(/\/+$/, "");
 const key = process.env.GPU_KEY || "";
@@ -65,19 +66,17 @@ async function main() {
           stats: await systemStats().catch(() => null),
         },
       });
-      if (active)
-        await request(`/api/gpu/jobs/${active.job.id}/progress`, {
-          claim_token: active.job.claim_token,
-        });
-    } catch (error) {
-      if (active && (error as any).status === 409)
-        active.abort.abort(new Error("Claim cancelled or expired"));
+      await renewClaim(() => active, request);
+    } catch {
+      // A worker heartbeat failure does not revoke a token-bearing job claim.
     } finally {
       beating = false;
     }
   }
   await heartbeat();
-  log.ok(`Connected to ${url.host} · model ${process.env.COLAB_LLM_MODEL || "Qwen/Qwen3.6-27B"}`);
+  log.ok(
+    `Connected to ${url.host} · model ${process.env.COLAB_LLM_MODEL || "Qwen/Qwen3.6-27B"}`,
+  );
   const timer = setInterval(() => void heartbeat(), 15000);
   try {
     while (!stop.signal.aborted) {
@@ -144,7 +143,9 @@ async function main() {
         signal.throwIfAborted();
         // Render polling repeats the same stage every 15 s; print it at most once a minute.
         if (stage !== lastStage || Date.now() - lastPrinted > 60000) {
-          log.detail(`${stage} · ${Math.round(pct)}% · ${duration(Date.now() - started)}`);
+          log.detail(
+            `${stage} · ${Math.round(pct)}% · ${duration(Date.now() - started)}`,
+          );
           lastStage = stage;
           lastPrinted = Date.now();
         }
@@ -183,15 +184,15 @@ async function main() {
             ),
         });
         signal.throwIfAborted();
-        await request(
-          `/api/gpu/jobs/${job.id}/done`,
-          { claim_token: job.claim_token, result },
-          signal,
+        await completeJob(job, result, request, signal);
+        log.ok(
+          `${jobLabel(job)} done in ${duration(Date.now() - started)}`,
+          tag,
         );
-        log.ok(`${jobLabel(job)} done in ${duration(Date.now() - started)}`, tag);
         if (job.type === "assemble") finalVideoDone = true;
       } catch (error) {
-        const reason = error instanceof Error ? error.message : "GPU task failed";
+        const reason =
+          error instanceof Error ? error.message : "GPU task failed";
         if (!signal.aborted)
           await request(`/api/gpu/jobs/${job.id}/fail`, {
             claim_token: job.claim_token,
@@ -200,7 +201,10 @@ async function main() {
         if (signal.aborted && !stop.signal.aborted)
           log.warn(`${jobLabel(job)} cancelled or claim expired`, tag);
         else {
-          log.error(`${jobLabel(job)} failed after ${duration(Date.now() - started)}`, tag);
+          log.error(
+            `${jobLabel(job)} failed after ${duration(Date.now() - started)}`,
+            tag,
+          );
           log.detail(reason);
           await serviceLogs();
         }

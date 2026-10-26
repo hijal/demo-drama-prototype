@@ -6,9 +6,18 @@ import type { Scene, Asset } from "../../worker/src/script/types";
 import { outputSubfolder } from "./workspace";
 import { canLatentChain } from "./motion";
 import { renderFormat, matchingContextFormat } from "./render-format";
+import { referenceViews } from "./reference-detail";
 import { render, upload, releaseComfy } from "./comfy";
 import { command, download, inlineImage, probe } from "./io";
-import { alignDialogue, subtitles, type Line, type Word } from "./qa";
+import {
+  alignDialogue,
+  subtitles,
+  assessTranscript,
+  evaluateQa,
+  framePlan,
+  type Line,
+  type Word,
+} from "./qa";
 export interface Job {
   id: string;
   project_id: string;
@@ -29,11 +38,34 @@ export interface Context {
 }
 /** What the visual judge scores, with weights that add up to 1. */
 export const QA_CHECKS = [
-  { name: "cast", weight: 0.3, about: "every CAST member visible and recognisable as their reference; nobody extra" },
-  { name: "framing", weight: 0.2, about: "KEYFRAME, FRAME and CAMERA: faces and key objects inside the frame, people where the script puts them" },
-  { name: "action", weight: 0.2, about: "the VISUAL action happens and is clearly visible" },
-  { name: "setting", weight: 0.15, about: "location, time of day and prop state/variants as written" },
-  { name: "quality", weight: 0.15, about: "the visual_style of the script is followed (e.g. realistic versus cartoon); no deformed bodies or hands, no text or logos, no glitches" },
+  {
+    name: "cast",
+    weight: 0.3,
+    about:
+      "the characters required in the sampled shot are recognisable as their references; respect close-ups, scripted occlusion and off-screen or voice-only speakers",
+  },
+  {
+    name: "framing",
+    weight: 0.2,
+    about:
+      "KEYFRAME, FRAME and CAMERA: faces and key objects inside the frame, people where the script puts them",
+  },
+  {
+    name: "action",
+    weight: 0.2,
+    about: "the VISUAL action happens and is clearly visible",
+  },
+  {
+    name: "setting",
+    weight: 0.15,
+    about: "location, time of day and prop state/variants as written",
+  },
+  {
+    name: "quality",
+    weight: 0.15,
+    about:
+      "the visual_style of the script is followed (e.g. realistic versus cartoon); no deformed bodies or hands, no text or logos, no glitches",
+  },
 ];
 /** QA_MIN_SCORE from the notebook; 75 by owner decision. */
 export function qaMinimum() {
@@ -150,7 +182,9 @@ async function imageFile(
 }
 const MAX_AUTO_RETAKES = 3;
 /** " Visual style: … Avoid: …" from the approved script, or nothing. */
-export function scriptLook(style?: { prompt?: string; negative?: string } | null) {
+export function scriptLook(
+  style?: { prompt?: string; negative?: string } | null,
+) {
   return `${style?.prompt ? ` Visual style: ${style.prompt}.` : ""}${style?.negative ? ` Avoid: ${style.negative}.` : ""}`;
 }
 interface ReferenceQa {
@@ -197,7 +231,9 @@ async function judgeReference(
   );
   const score = Number(verdict.score);
   return {
-    score: Number.isFinite(score) ? Math.round(Math.max(0, Math.min(100, score))) : 0,
+    score: Number.isFinite(score)
+      ? Math.round(Math.max(0, Math.min(100, score)))
+      : 0,
     threshold: qaMinimum(),
     issues: Array.isArray(verdict.issues) ? verdict.issues.map(String) : [],
     observed: String(verdict.observed || ""),
@@ -205,6 +241,7 @@ async function judgeReference(
   };
 }
 async function asset(c: Context) {
+  const extraViews = referenceViews(process.env.REFERENCE_DETAIL);
   const p = c.job.payload,
     spec = p.spec as Asset,
     files: Record<string, string> = {};
@@ -214,8 +251,7 @@ async function asset(c: Context) {
     .map(([key, value]) => `${key}: ${value}`)
     .join(". ")}. ${p.instruction || ""}${look}`;
   const voiceOnly = spec.characterType === "voice_only";
-  let front: string | undefined,
-    referenceQa: ReferenceQa | undefined;
+  let front: string | undefined, referenceQa: ReferenceQa | undefined;
   if (!voiceOnly) {
     let reference: string | undefined;
     if (p.instruction && p.previous?.front)
@@ -239,7 +275,13 @@ async function asset(c: Context) {
         `front-${attempt}.png`,
         reference,
       );
-      const qa = await judgeReference(c, spec, description, p.instruction, path);
+      const qa = await judgeReference(
+        c,
+        spec,
+        description,
+        p.instruction,
+        path,
+      );
       await c.progress(6 + attempt * 2, `Reference QA score ${qa.score}%`);
       if (!best || qa.score > best.qa.score) best = { path, qa };
       if (qa.score >= qaMinimum()) break;
@@ -249,7 +291,7 @@ async function asset(c: Context) {
     referenceQa = best!.qa;
     files.front = await c.upload(front!, "front.png");
     const views = [front];
-    for (const view of ["face", "left", "right", "back"]) {
+    for (const view of extraViews) {
       await c.progress(15 + views.length * 8, `Creating ${view} reference`);
       const path = await imageFile(
         c,
@@ -279,36 +321,42 @@ async function asset(c: Context) {
       );
       files[`variant_${i}`] = await c.upload(path, `variant-${i}.png`);
     }
-    const sheet = join(c.folder, "sheet.png");
-    await command(
-      "ffmpeg",
-      [
-        "-y",
-        ...views.flatMap((path) => ["-i", path]),
-        "-filter_complex",
-        views
-          .map(
-            (_, i) =>
-              `[${i}:v]scale=384:384:force_original_aspect_ratio=decrease,pad=384:384:(ow-iw)/2:(oh-ih)/2:white[v${i}]`,
-          )
-          .join(";") +
-          `;${views.map((_, i) => `[v${i}]`).join("")}hstack=inputs=${views.length}[sheet]`,
-        "-map",
-        "[sheet]",
-        "-frames:v",
-        "1",
-        sheet,
-      ],
-      c.signal,
-    );
-    files.sheet = await c.upload(sheet, "sheet.png");
+    if (views.length === 1) {
+      files.sheet = files.front;
+    } else {
+      const sheet = join(c.folder, "sheet.png");
+      await command(
+        "ffmpeg",
+        [
+          "-y",
+          ...views.flatMap((path) => ["-i", path]),
+          "-filter_complex",
+          views
+            .map(
+              (_, i) =>
+                `[${i}:v]scale=384:384:force_original_aspect_ratio=decrease,pad=384:384:(ow-iw)/2:(oh-ih)/2:white[v${i}]`,
+            )
+            .join(";") +
+            `;${views.map((_, i) => `[v${i}]`).join("")}hstack=inputs=${views.length}[sheet]`,
+          "-map",
+          "[sheet]",
+          "-frames:v",
+          "1",
+          sheet,
+        ],
+        c.signal,
+      );
+      files.sheet = await c.upload(sheet, "sheet.png");
+    }
   }
   // A look-only change keeps the approved voice so the character still sounds the same.
   const keepVoice =
     spec.kind === "character" &&
     p.instruction &&
     p.previous?.voice &&
-    !/voice|sound|accent|speak|speech|tone|gola|kontho|awaj/i.test(p.instruction);
+    !/voice|sound|accent|speak|speech|tone|gola|kontho|awaj/i.test(
+      p.instruction,
+    );
   if (keepVoice) {
     await c.progress(75, "Keeping the previous voice sample");
     files.voice = await c.upload(
@@ -538,9 +586,15 @@ async function qa(c: Context) {
     },
   ];
   // Supply approved identities as evidence before the sampled scene frames.
+  const samples = framePlan(scene, info.duration);
   const references = p.assets
     .filter((asset: any) => asset.files?.front)
-    .slice(0, 3);
+    .sort(
+      (a: any, b: any) =>
+        Number(b.kind === "character") - Number(a.kind === "character"),
+    )
+    // The local multimodal server accepts 24 content blocks per message.
+    .slice(0, Math.floor((23 - samples.length * 2) / 2));
   for (const asset of references) {
     const image = await media(
       c,
@@ -556,7 +610,7 @@ async function qa(c: Context) {
       image_url: { url: await inlineImage(image) },
     });
   }
-  const frames = Math.min(8, Math.max(3, scene.shots.length * 3));
+  const frames = samples.length;
   for (let i = 0; i < frames; i++) {
     const frame = join(c.folder, `frame-${i}.jpg`);
     await command(
@@ -564,9 +618,7 @@ async function qa(c: Context) {
       [
         "-y",
         "-ss",
-        String(
-          Math.min(info.duration - 0.05, ((i + 0.1) / frames) * info.duration),
-        ),
+        String(samples[i].at),
         "-i",
         file,
         "-frames:v",
@@ -579,7 +631,7 @@ async function qa(c: Context) {
     );
     content.push({
       type: "text",
-      text: `Scene frame ${i + 1} of ${frames}, at ${(((i + 0.1) / frames) * info.duration).toFixed(1)}s`,
+      text: `Scene frame ${i + 1} of ${frames}: ${JSON.stringify(samples[i])}. Use this shot's cast, camera and framing. Voice-only narrators need not be visible. Scene CAST lists participants across the scene, not actors required in every close-up. Scripted occlusion (for example a dust cloud) is not itself a missing-character error.`,
     });
     content.push({
       type: "image_url",
@@ -621,16 +673,29 @@ async function qa(c: Context) {
     0,
   );
   await c.progress(45, "Checking actual dialogue");
-  const transcript = await local(
+  let transcript = await local(
+    "/transcribe",
+    { file: file.slice(c.root.length + 1) },
+    c.signal,
+  );
+  let speech = assessTranscript(transcript.words, info.duration);
+  if (!speech.reliable) {
+    await c.progress(
+      48,
+      "Rechecking unreliable speech recognition (no new video render)",
+    );
+    transcript = await local(
       "/transcribe",
-      { file: file.slice(c.root.length + 1) },
+      { file: file.slice(c.root.length + 1), retry: true },
       c.signal,
-    ),
-    words = transcript.words as Word[];
-  if (!Array.isArray(words)) throw new Error("ASR returned no word timestamps");
+    );
+    speech = assessTranscript(transcript.words, info.duration);
+  }
+  const words: Word[] = speech.reliable ? transcript.words : [];
   const alignment = alignDialogue(lines(scene), words),
     issues: string[] = visual.issues.map(String),
     notes: string[] = [];
+  if (!speech.reliable) issues.push(speech.reason);
   if (alignment.wer > 0.25)
     issues.push(
       `Dialogue mismatch: normalized word error ${(alignment.wer * 100).toFixed(0)}%`,
@@ -683,7 +748,11 @@ async function qa(c: Context) {
       result.similarity,
     );
     // Until a threshold is calibrated, voice similarity is recorded but not scored.
-    if (threshold !== null && Number.isFinite(threshold) && result.similarity < threshold) {
+    if (
+      threshold !== null &&
+      Number.isFinite(threshold) &&
+      result.similarity < threshold
+    ) {
       issues.push(`Voice timbre differs for ${line.speaker}`);
       voicePenalty = 15;
     }
@@ -694,18 +763,19 @@ async function qa(c: Context) {
     notes.push("Lip-sync is not measured automatically");
   const hasDialogue = alignment.lines.length > 0,
     dialogueScore = Math.round(100 * (1 - Math.min(1, alignment.wer)));
-  const score = Math.max(
-    0,
-    Math.round(
-      (hasDialogue ? visualScore * 0.8 + dialogueScore * 0.2 : visualScore) -
-        voicePenalty,
-    ),
-  );
   const minimum = qaMinimum();
+  const verdict = evaluateQa(
+    visualScore,
+    alignment.wer,
+    hasDialogue,
+    speech.reliable,
+    voicePenalty,
+    minimum,
+  );
   return {
-    score,
+    score: verdict.score,
     threshold: minimum,
-    pass: score >= minimum,
+    pass: verdict.pass,
     checks: hasDialogue
       ? [
           ...checks,
@@ -714,7 +784,11 @@ async function qa(c: Context) {
             expected: lines(scene)
               .map((line) => line.text)
               .join(" / "),
-            observed: words.map((w) => w.word).join(" ").trim() || "no speech heard",
+            observed:
+              words
+                .map((w) => w.word)
+                .join(" ")
+                .trim() || "no speech heard",
             score: dialogueScore,
           },
         ]
@@ -722,10 +796,15 @@ async function qa(c: Context) {
     issues,
     notes,
     fix_hint: String(visual.prompt_changes || "") || issues.join("; "),
-    scores: { visual: Math.round(visualScore), wordErrorRate: alignment.wer, voiceScores },
+    scores: {
+      visual: Math.round(visualScore),
+      wordErrorRate: alignment.wer,
+      voiceScores,
+    },
     words,
     alignedLines: alignment.lines,
-    needsOwnerReview: false,
+    needsOwnerReview: verdict.needsOwnerReview,
+    transcriptReliable: speech.reliable,
     lipSync: "not-measured",
     duration: info.duration,
     voiceThreshold: threshold,

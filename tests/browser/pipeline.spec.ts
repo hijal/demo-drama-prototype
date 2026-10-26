@@ -107,3 +107,25 @@ test("cloud studio preserves the original shell and project approval without cal
     page.getByRole("heading", { name: "Ada", exact: true }),
   ).toBeVisible();
 });
+
+test('unreliable speech is shown as review rather than a below-threshold render failure',async({page})=>{
+  await page.route('**/api/**',async(route)=>{
+    const path=new URL(route.request().url()).pathname;
+    const project={id:'speech-review',title:'Speech review',revision:1,approved_script_id:'script',auto_episode:null};
+    let data:any={};
+    if(path==='/api/capabilities')data={manual:false,pipeline:true};
+    else if(path==='/api/status')data={gpu:[]};
+    else if(path==='/api/projects')data={projects:[project]};
+    else if(path==='/api/projects/speech-review/logs')data=[];
+    else if(path==='/api/projects/speech-review')data={
+      project,scripts:[{id:'script',kind:'raw',body:film,report_json:'{}'}],assets:[],assetVersions:[],episodes:[{number:0,title:'Film'}],
+      scenes:[{id:'scene',number:1,episode_number:0,duration:8,approved_clip_id:null,spec_json:JSON.stringify({title:'A greeting',fields:{},shots:[]})}],
+      clips:[{id:'take',scene_id:'scene',take:1,status:'review',params_json:'{}',qa_json:JSON.stringify({score:80,threshold:75,pass:false,needsOwnerReview:true,issues:['ASR repeated the same word excessively']})}],jobs:[],renders:[],
+    };
+    await route.fulfill({json:data});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Scenes',exact:true}).click();
+  await expect(page.getByText('QA 80% · speech review needed',{exact:true})).toBeVisible();
+  await expect(page.getByText('QA 80% · below 75%',{exact:true})).toHaveCount(0);
+});
