@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { alignDialogue, subtitles } from "../src/qa";
+import { alignDialogue, sameWord, subtitles } from "../src/qa";
 test("aligns exact script spelling to real speech timestamps and measures missing words", () => {
   const result = alignDialogue(
     [{ speaker: "ada", text: "Hello, little world!", at: 0 }],
@@ -45,3 +45,21 @@ test("does not invent timestamps for unmatched speech when ASR detected other wo
     "",
   );
 });
+test("dialogue matching forgives sound-alike ASR slips but not wrong words", () => {
+  assert.equal(sameWord("paddy", "patty"), true)
+  assert.equal(sameWord("ahh", "ah"), true)
+  assert.equal(sameWord("breakfast", "breakfasts"), true)
+  assert.equal(sameWord("cat", "cut"), false)
+  assert.equal(sameWord("breakfast", "dinner"), false)
+  const words = "The patty. The pig. Breakfast. Ah, breakfast."
+    .split(" ")
+    .map((word, i) => ({ word, start: i, end: i + 0.5 }))
+  const result = alignDialogue(
+    [
+      { speaker: "narrator", text: "The paddy. The pig. Breakfast.", at: 0.5 },
+      { speaker: "shukor", text: "Ahh... breakfast.", at: 3 },
+    ],
+    words,
+  )
+  assert.equal(result.wer, 0)
+})

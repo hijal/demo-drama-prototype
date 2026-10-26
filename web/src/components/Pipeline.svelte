@@ -68,6 +68,17 @@
     }
     return map
   })
+  // The dock remembers whether the owner closed it.
+  const LOG_OPEN = 'drama-pipeline:log-open'
+  let logOpen = $state(
+    (() => {
+      try {
+        return localStorage.getItem(LOG_OPEN) !== '0'
+      } catch {
+        return true
+      }
+    })(),
+  )
   // Live log: repeated progress lines collapse into one line with a count.
   let logBox = $state<HTMLElement>()
   let followLogs = true
@@ -790,19 +801,26 @@
         <h2>Scene board</h2>
         <select aria-label="Scene board episode" bind:value={episode}
           >{#each detail.episodes as ep}<option value={ep.number}
-              >{ep.number === 0 ? 'Film' : `Episode ${ep.number}`} · {ep.title}</option
+              >{ep.number === 0 ? 'Film' : `Episode ${ep.number}`}{ep.title
+                ? ` · ${ep.title}`
+                : ''}</option
             >{/each}</select
         >
       </div>
       <div class="inline">
         <button
           class="primary"
-          disabled={busy || !scenes.length}
+          disabled={busy || !scenes.length || detail.project.auto_episode !== null}
+          title={detail.project.auto_episode !== null
+            ? 'Already rendering automatically'
+            : 'Continue rendering the scenes that have no take yet'}
           onclick={() =>
             action(() => api(`/api/projects/${projectId}/render`, { episode }))}
-          >Resume rendering</button
+          >{detail.project.auto_episode !== null
+            ? 'Rendering…'
+            : 'Resume rendering'}</button
         ><button
-          disabled={busy}
+          disabled={busy || detail.project.auto_episode === null}
           onclick={() =>
             action(() => api(`/api/projects/${projectId}/stop`, {}))}
           >Stop after current jobs</button
@@ -972,7 +990,16 @@
           </article>{/each}
       </div>
     {/if}
-    <details class="log-dock" open>
+    <details
+      class="log-dock"
+      open={logOpen}
+      ontoggle={(e) => {
+        logOpen = e.currentTarget.open
+        try {
+          localStorage.setItem(LOG_OPEN, logOpen ? '1' : '0')
+        } catch {}
+      }}
+    >
       <summary
         >Live log{#if gpuOnline}<span class="live-dot" title="Colab online"
           ></span>{/if}<small

@@ -15,6 +15,41 @@ export const normalize = (text: string) =>
     .trim()
     .split(/\s+/)
     .filter(Boolean)
+// Collapse doubled letters ("ahh" → "ah", "paddy" → "pady") before comparing.
+const squeeze = (word: string) => word.replace(/(.)\1+/g, '$1')
+function oneEditApart(a: string, b: string) {
+  if (Math.abs(a.length - b.length) > 1) return false
+  let i = 0,
+    j = 0,
+    edits = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++
+      j++
+      continue
+    }
+    if (++edits > 1) return false
+    if (a.length > b.length) i++
+    else if (b.length > a.length) j++
+    else {
+      i++
+      j++
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1
+}
+/**
+ * Speech recognition mishears sound-alike words ("paddy" as "patty"). Treat a
+ * one-letter slip in a word of four or more letters as the same word, so the
+ * dialogue score reflects missing or wrong lines, not ASR spelling.
+ */
+export function sameWord(expected: string, heard: string) {
+  if (expected === heard) return true
+  const a = squeeze(expected),
+    b = squeeze(heard)
+  if (a === b) return true
+  return Math.min(a.length, b.length) >= 4 && oneEditApart(a, b)
+}
 export function alignDialogue(lines: Line[], words: Word[]) {
   const expected = lines.flatMap((line, index) =>
     normalize(line.text).map((word) => ({ word, index })),
@@ -34,13 +69,13 @@ export function alignDialogue(lines: Line[], words: Word[]) {
         table[i - 1][j] + 1,
         table[i][j - 1] + 1,
         table[i - 1][j - 1] +
-          (expected[i - 1].word === spoken[j - 1].word ? 0 : 1),
+          (sameWord(expected[i - 1].word, spoken[j - 1].word) ? 0 : 1),
       )
   const matches = new Map<number, number[]>()
   let i = expected.length,
     j = spoken.length
   while (i > 0 && j > 0) {
-    const equal = expected[i - 1].word === spoken[j - 1].word
+    const equal = sameWord(expected[i - 1].word, spoken[j - 1].word)
     if (table[i][j] === table[i - 1][j - 1] + (equal ? 0 : 1)) {
       if (equal) {
         const line = expected[i - 1].index

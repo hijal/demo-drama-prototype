@@ -732,4 +732,27 @@ test("hands-off flow: upload auto-repairs and approves, references and scenes ap
   expect(detail.scenes.every((s: any) => s.approved_clip_id)).toBe(true);
   expect(detail.project.auto_episode).toBeNull();
   expect(await claim()).toBeNull();
+
+  // Live-test regression: a scene's follow-up step was lost, leaving the
+  // automatic queue on with nothing queued. The next claim heals it.
+  const db = await mf.getD1Database("DB");
+  const ep2 = detail.scenes.find((s: any) => s.episode_number === 2);
+  await db
+    .prepare("UPDATE scenes SET approved_clip_id=NULL WHERE id=?")
+    .bind(ep2.id)
+    .run();
+  await db
+    .prepare("UPDATE projects SET auto_episode=2 WHERE id=?")
+    .bind(p.id)
+    .run();
+  const healed = await claim();
+  expect(healed.type).toBe("clip");
+  expect(healed.payload.sceneId).toBe(ep2.id);
+  expect(healed.error ?? null).toBeNull();
+  const lines = (await (
+    await request(`/api/projects/${p.id}/logs`)
+  ).json()) as any[];
+  expect(lines.some((l) => l.line.includes("automatic queue had stopped"))).toBe(
+    true,
+  );
 });

@@ -26,6 +26,8 @@ import {
   scheduleNext,
   resumeRendering,
   approveAssetVersion,
+  healQueues,
+  scriptStyle,
 } from "./planning";
 import { faithfulness } from "./llm/fixer";
 import { serializeScript } from "./script/serialize";
@@ -141,9 +143,10 @@ async function gpu(request: Request, env: Env, parts: string[]) {
       );
     await expireLeases(env);
     await cleanupUploads(env);
+    await healQueues(env);
     const job = await query(
       env,
-      "UPDATE jobs SET status='claimed',claimed_by=?,claimed_at=?,claim_token=?,lease_until=?,attempt=attempt+1,updated_at=? WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY priority DESC,created_at,id LIMIT 1) AND status='queued' RETURNING *",
+      "UPDATE jobs SET status='claimed',error=NULL,claimed_by=?,claimed_at=?,claim_token=?,lease_until=?,attempt=attempt+1,updated_at=? WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY priority DESC,created_at,id LIMIT 1) AND status='queued' RETURNING *",
       data.workerId,
       now(),
       id(),
@@ -550,6 +553,29 @@ async function gpu(request: Request, env: Env, parts: string[]) {
     409,
     "Claim expired before completion",
   );
+  // The result is saved. What follows (approvals, queueing the next step, log
+  // lines) must not turn a saved result into a failed request: an error here is
+  // logged, and the queue healer picks the project up again.
+  try {
+    await afterCompletion(env, job, jobId, payload, result);
+  } catch (error) {
+    console.error("Follow-up after job completion failed", error);
+    await projectLog(
+      env,
+      job.project_id,
+      `! The next step after ${describeJob(job.type, payload)} failed (${error instanceof Error ? error.message : "unknown error"}); the studio retries it automatically within a few minutes`,
+      jobId,
+    );
+  }
+  return ok({ ok: true });
+}
+async function afterCompletion(
+  env: Env,
+  job: Record<string, any>,
+  jobId: string,
+  payload: any,
+  result: any,
+) {
   const name = describeJob(job.type, payload),
     log = (line: string) => projectLog(env, job.project_id, line, jobId);
   if (job.type === "fix_script") {
@@ -617,7 +643,7 @@ async function gpu(request: Request, env: Env, parts: string[]) {
           String(result.fix_hint || ""),
           retake + 1,
         );
-        return ok({ ok: true });
+        return;
       } else {
         const best = await one(
           env,
@@ -642,7 +668,6 @@ async function gpu(request: Request, env: Env, parts: string[]) {
     }
     await scheduleNext(env, job.project_id);
   }
-  return ok({ ok: true });
 }
 async function queueAsset(
   env: Env,
@@ -681,6 +706,7 @@ async function queueAsset(
     instruction: instruction.slice(0, 2000),
     previous: previous ? JSON.parse(previous.files_json) : null,
     scriptVersion: project.approved_script_id,
+    style: await scriptStyle(env, project.approved_script_id),
     autoApprove,
   });
   await query(
@@ -1155,5 +1181,6 @@ export default {
   async scheduled(_event: ScheduledController, env: Env) {
     await expireLeases(env);
     await cleanupUploads(env);
+    await healQueues(env);
   },
 } satisfies ExportedHandler<Env>;

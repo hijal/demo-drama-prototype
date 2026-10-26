@@ -14,6 +14,7 @@ import {
   invalidateDependentClipsSQL,
 } from "./db";
 import type { Scene, Script } from "./script/types";
+import { projectLog } from "./activity";
 export function semanticJSON(value: unknown): string {
   const normalize = (item: unknown): unknown =>
     Array.isArray(item)
@@ -37,6 +38,20 @@ export function semanticJSON(value: unknown): string {
           )
         : item;
   return JSON.stringify(normalize(value));
+}
+/** The approved script's look, so references, clips and QA all follow it. */
+export async function scriptStyle(env: Env, scriptVersionId: string | null) {
+  if (!scriptVersionId) return null;
+  const version = await one(
+    env,
+    "SELECT body FROM script_versions WHERE id=?",
+    scriptVersionId,
+  );
+  if (!version) return null;
+  const header = parseScript(version.body).header;
+  const prompt = header["STYLE PROMPT"] || header.STYLE || "";
+  const negative = header["NEGATIVE PROMPT"] || "";
+  return prompt || negative ? { prompt, negative } : null;
 }
 export function references(scene: Scene) {
   return [
@@ -282,6 +297,7 @@ export async function queueClip(
     hint,
     retake,
     take,
+    style: await scriptStyle(env, p.approved_script_id),
     context: previous?.status === "ready" ? previous : null,
   };
   // UNIQUE(scene_id,take) is the concurrency guard; no duplicate active take is silently accepted.
@@ -311,15 +327,19 @@ export async function queueClip(
   ]);
   return { clipId, jobId };
 }
-export async function scheduleNext(env: Env, projectId: string) {
+/** Queue the next scene of the automatic episode; true when something was queued. */
+export async function scheduleNext(
+  env: Env,
+  projectId: string,
+): Promise<boolean> {
   const p = await getProject(env, projectId);
-  if (p.auto_episode === null) return;
+  if (p.auto_episode === null) return false;
   const active = await one(
     env,
     "SELECT id FROM jobs WHERE project_id=? AND type IN ('clip','qa') AND status IN ('queued','claimed','running') LIMIT 1",
     projectId,
   );
-  if (active) return;
+  if (active) return false;
   // A scene needs a take when none is selected or the selected one went stale.
   // QA always selects a take (the best one after the auto retakes), so a scene is never retried forever.
   const next = await one(
@@ -331,7 +351,7 @@ export async function scheduleNext(env: Env, projectId: string) {
   );
   if (next) {
     await queueClip(env, projectId, next.id);
-    return;
+    return true;
   }
   await query(
     env,
@@ -339,7 +359,33 @@ export async function scheduleNext(env: Env, projectId: string) {
     projectId,
   ).run();
   // Owner request: no clicks between episodes; continue with the next one that is ready.
-  await resumeRendering(env, projectId);
+  return resumeRendering(env, projectId);
+}
+/**
+ * Safety net: a project whose automatic queue is on but has no scene job
+ * queued or running is stuck (a follow-up step failed). Queue its next scene.
+ * Runs from the five-minute cron and whenever Colab asks for work.
+ */
+export async function healQueues(env: Env) {
+  const stuck = await all(
+    env,
+    "SELECT p.id FROM projects p WHERE p.auto_episode IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.project_id=p.id AND j.type IN ('clip','qa') AND j.status IN ('queued','claimed','running','finishing'))",
+  );
+  for (const { id: projectId } of stuck)
+    try {
+      if (await scheduleNext(env, projectId))
+        await projectLog(
+          env,
+          projectId,
+          "↻ The automatic queue had stopped; it continues with the next scene",
+        );
+    } catch (error) {
+      await projectLog(
+        env,
+        projectId,
+        `! The automatic queue could not continue: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+    }
 }
 /**
  * Start (or continue) automatic rendering with the first episode that still
@@ -376,8 +422,7 @@ export async function resumeRendering(env: Env, projectId: string) {
     first,
     projectId,
   ).run();
-  await scheduleNext(env, projectId);
-  return true;
+  return scheduleNext(env, projectId);
 }
 /** Approve one reference version and mark takes built from another version stale. */
 export async function approveAssetVersion(

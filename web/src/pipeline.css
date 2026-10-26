@@ -1263,7 +1263,8 @@
     animation: next-step-pulse 1.6s ease-in-out infinite;
   }
   .log-lines {
-    max-height: 190px;
+    /* Small laptop screens keep most of the page visible. */
+    max-height: min(190px, 22vh);
     overflow: auto;
     padding: 0 14px 10px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
