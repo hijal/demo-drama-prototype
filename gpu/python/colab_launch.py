@@ -29,8 +29,10 @@ COLAB_LLM_MODEL = "Qwen/Qwen3.6-27B" #@param ["Qwen/Qwen3.6-27B", "Qwen/Qwen3.5-
 CONTINUITY_STRATEGY = "reference-video" #@param ["reference-video", "latent"]
 # Latent mode is available for GPU evaluation; no quality winner is selected yet.
 IDLE_MINUTES = 20 #@param {type:"integer"}
+ASPECT_RATIO = "9:16" #@param ["9:16", "16:9"]
+# Overrides the script aspect for new scene renders and final exports.
 RENDER_QUALITY = "1080p" #@param ["1080p", "720p"]
-# 720p renders faster for testing the pipeline; final films use 1080p.
+# Default: 9:16 + 1080p = 1080x1920 Full HD for Reels. 720p is available for testing.
 QA_MIN_SCORE = 75 #@param {type:"slider", min:50, max:95, step:5}
 # QA approves a reference or scene at this score (%); below it, it retries up to 3 times and keeps the best.
 TIMEZONE = "Asia/Dhaka" #@param {type:"string"}
@@ -58,6 +60,7 @@ for directory in [os.environ["COMFY_OUTPUT_DIR"], os.environ["COMFY_INPUT_DIR"]]
 os.environ["COLAB_LLM_MODEL"] = COLAB_LLM_MODEL
 os.environ["IDLE_MINUTES"] = str(IDLE_MINUTES)
 os.environ["CONTINUITY_STRATEGY"] = CONTINUITY_STRATEGY
+os.environ["RENDER_ASPECT_RATIO"] = ASPECT_RATIO
 os.environ["RENDER_SHORT_SIDE"] = RENDER_QUALITY.rstrip("p")
 os.environ["QA_MIN_SCORE"] = str(QA_MIN_SCORE)
 # Validate the remote GPU key/bypass before installing the second model environment.
@@ -78,6 +81,10 @@ try:
 except Exception:
     raise RuntimeError("Studio GPU preflight failed. Check STUDIO_URL, GPU_KEY and the /api/gpu/* Access bypass. Credentials are not printed.") from None
 done(f"Studio reachable: {parsed_url.netloc}")
+short_side = int(RENDER_QUALITY.rstrip("p"))
+long_side = short_side * 16 // 9
+output_size = f"{short_side}x{long_side}" if ASPECT_RATIO == "9:16" else f"{long_side}x{short_side}"
+done(f"Output: {ASPECT_RATIO} · {output_size} · {RENDER_QUALITY}")
 if VOICE_MIN_SIMILARITY.strip():
     float(VOICE_MIN_SIMILARITY)
     os.environ["VOICE_MIN_SIMILARITY"] = VOICE_MIN_SIMILARITY

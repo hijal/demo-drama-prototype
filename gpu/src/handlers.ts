@@ -5,6 +5,7 @@ import { ColabClient } from "../../worker/src/llm/colab";
 import type { Scene, Asset } from "../../worker/src/script/types";
 import { outputSubfolder } from "./workspace";
 import { canLatentChain } from "./motion";
+import { renderFormat, matchingContextFormat } from "./render-format";
 import { render, upload, releaseComfy } from "./comfy";
 import { command, download, inlineImage, probe } from "./io";
 import { alignDialogue, subtitles, type Line, type Word } from "./qa";
@@ -126,14 +127,6 @@ function lines(scene: Scene): Line[] {
     offset += shot.duration;
   }
   return result;
-}
-/** Output size; RENDER_SHORT_SIDE=720 gives quick test renders (default 1080p). */
-function renderSize(aspect: string) {
-  const short = Number(process.env.RENDER_SHORT_SIDE) === 720 ? 720 : 1080,
-    long = (short * 16) / 9;
-  return aspect === "9:16"
-    ? { width: short, height: long }
-    : { width: long, height: short };
 }
 async function imageFile(
   c: Context,
@@ -354,17 +347,20 @@ async function asset(c: Context) {
 async function clip(c: Context) {
   const p = c.job.payload,
     scene = p.scene as Scene,
-    speech = lines(scene);
+    speech = lines(scene),
+    format = renderFormat(p.aspect);
   const strategy = process.env.CONTINUITY_STRATEGY || "reference-video";
   if (!["latent", "reference-video"].includes(strategy))
     throw new Error("Invalid continuity strategy");
-  const stored = p.context?.params_json
-    ? JSON.parse(p.context.params_json).contextLatents
+  const previousParams = p.context?.params_json
+    ? JSON.parse(p.context.params_json)
     : null;
+  const stored = previousParams?.contextLatents;
   const latentChain =
     strategy === "latent" &&
     !!stored?.low &&
     !!stored?.high &&
+    matchingContextFormat(previousParams, format) &&
     canLatentChain(scene.duration);
   const headSeconds = latentChain ? 22 / 24 : 0;
   const motion: import("./motion").MotionContext | undefined =
@@ -396,6 +392,7 @@ async function clip(c: Context) {
             owner_note: p.note,
             qa_fix_hint: p.hint,
             visual_style: p.style?.prompt || null,
+            output_aspect: format.aspectRatio,
           }),
         },
       ],
@@ -480,10 +477,10 @@ async function clip(c: Context) {
     refImages,
     refVideos,
     refAudios,
-    aspectRatio: p.aspect,
+    aspectRatio: format.aspectRatio,
     duration: scene.duration,
     seed: Math.floor(Math.random() * 2147483647),
-    targetDimensions: renderSize(p.aspect),
+    targetDimensions: format.targetDimensions,
     lowResMP: 0.2,
     firstSamplerSteps: 4,
     sigmaVariant: "3step",
@@ -736,6 +733,7 @@ async function qa(c: Context) {
 }
 export async function assemble(c: Context) {
   const p = c.job.payload,
+    format = renderFormat(p.aspect),
     clips: Array<{
       path: string;
       duration: number;
@@ -748,7 +746,7 @@ export async function assemble(c: Context) {
       source = await media(c, item.key, `source-${i}.mp4`),
       info = await probe(source, c.signal),
       path = join(c.folder, `normalized-${i}.mp4`),
-      { width, height } = renderSize(p.aspect);
+      { width, height } = format.targetDimensions;
     await command(
       "ffmpeg",
       [
